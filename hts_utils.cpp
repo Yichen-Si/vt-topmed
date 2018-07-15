@@ -56,14 +56,20 @@ char *faidx_fetch_uc_seq(const faidx_t *fai, const char *c_name, int p_beg_i, in
     iter = kh_get(s, fai->hash, c_name);
     if(iter == kh_end(fai->hash)) return 0;
     val = kh_value(fai->hash, iter);
+
+    if ( val.line_blen == 0 ) {
+       fprintf(stderr, "line_len = %u, line_blen = %u, len = %llu, seq_offset = %llu, qual_offset = %llu\n", val.line_len, val.line_blen, val.len, val.seq_offset, val.qual_offset);
+	abort();
+    }
+
     if(p_end_i < p_beg_i) p_beg_i = p_end_i;
     if(p_beg_i < 0) p_beg_i = 0;
-    else if(val.len <= p_beg_i) p_beg_i = val.len - 1;
+    //else if((uint64_t)(val.len-1) < (uint64_t)p_beg_u) p_beg_u = val.len - 1;
     if(p_end_i < 0) p_end_i = 0;
-    else if(val.len <= p_end_i) p_end_i = val.len - 1;
+    //else if((uint64_t)(val.len-1) < (uint64_t)p_end_u) p_end_u = val.len - 1;
 
     // Now retrieve the sequence
-    int ret = bgzf_useek(fai->bgzf, val.offset + p_beg_i / val.line_blen * val.line_len + p_beg_i % val.line_blen, SEEK_SET);
+    int ret = bgzf_useek(fai->bgzf, val.seq_offset + p_beg_i / val.line_blen * val.line_len + p_beg_i % val.line_blen, SEEK_SET);
     if ( ret<0 )
     {
         *len = -1;

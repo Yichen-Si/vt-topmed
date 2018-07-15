@@ -50,7 +50,8 @@
 typedef struct {
     int32_t line_len, line_blen;
     int64_t len;
-    uint64_t offset;
+    uint64_t seq_offset;
+    uint64_t qual_offset;
 } faidx1_t;
 
 KHASH_MAP_INIT_STR(s, faidx1_t)
