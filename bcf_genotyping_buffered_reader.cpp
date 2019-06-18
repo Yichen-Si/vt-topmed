@@ -410,7 +410,7 @@ void BCFGenotypingBufferedReader::collect_sufficient_statistics(GenotypingRecord
                             }
                             else
                             {
-                                q = abs(len-aug_ref[i].size())*30;
+                                q = abs((int32_t)len-(int32_t)aug_ref[i].size())*30;
                                 allele = -1;
                             }
 
