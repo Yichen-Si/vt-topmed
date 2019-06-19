@@ -698,7 +698,7 @@ void JointGenotypeBlockRecord::process_read(AugmentedBAMRecord& as, int32_t samp
 		allele = 1;
 	      }
 	      else {
-		q = abs(len-aug_ref[i].size())*30;
+		q = abs((int32_t)len-(int32_t)aug_ref[i].size())*30;
 		allele = -1;
 	      }
 	      
@@ -721,7 +721,7 @@ void JointGenotypeBlockRecord::process_read(AugmentedBAMRecord& as, int32_t samp
 		allele = 1;
 	      }
 	      else {
-		q = abs(len-aug_ref[i].size())*30;
+		q = abs((int32_t)len-(int32_t)aug_ref[i].size())*30;
 		allele = -1;
 	      }
 	      cycle = strand == 'F' ? (rpos0+1) : (rlen - rpos0);
