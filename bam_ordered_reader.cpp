@@ -206,16 +206,27 @@ bool BAMOrderedReader::read(bam1_t *s)
     return false;
 };
 
+BAMOrderedReader::~BAMOrderedReader()
+{
+  close();
+}
+
 /**
  * Closes the file.
  */
 void BAMOrderedReader::close()
 {
-    sam_close(file);
-    if (idx) hts_idx_destroy(idx);
-    idx = NULL;
-    if (hdr) bam_hdr_destroy(hdr);
-    hdr = NULL;
-    if (itr) hts_itr_destroy(itr);
-    itr = NULL;		 
+    if ( hdr ) bam_hdr_destroy(hdr);
+    if ( itr ) bam_itr_destroy(itr);
+    if ( idx ) hts_idx_destroy(idx);
+    if ( s ) bam_destroy1(s);
+    if ( file ) sam_close(file);
+    if ( str.s ) free(str.s);
+
+    hdr = nullptr;
+    itr = nullptr;
+    idx = nullptr;
+    s = nullptr;
+    file = nullptr;
+    str.s = nullptr;
 }
