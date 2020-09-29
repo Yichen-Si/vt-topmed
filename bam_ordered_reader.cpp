@@ -114,7 +114,7 @@ BAMOrderedReader::BAMOrderedReader(std::string file_name, std::vector<GenomeInte
     }
     else {
       fprintf(stderr,"Cannot load index for file %s\n",file_name.c_str());
-      if (intervals_present) exit(1);
+      if (intervals.size()) exit(1);
     }
 
     str = {0,0,0};
