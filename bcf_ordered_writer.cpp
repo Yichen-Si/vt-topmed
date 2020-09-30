@@ -78,6 +78,11 @@ BCFOrderedWriter::BCFOrderedWriter(std::string output_vcf_file_name, int32_t win
     linked_hdr = false;
 }
 
+BCFOrderedWriter::~BCFOrderedWriter()
+{
+  this->close();
+}
+
 /**
  * Duplicates a hdr and sets it.
  */
@@ -109,7 +114,11 @@ void BCFOrderedWriter::link_hdr(bcf_hdr_t *hdr)
  */
 void BCFOrderedWriter::write_hdr()
 {
-    bcf_hdr_write(file, hdr);
+    if (bcf_hdr_write(file, hdr) < 0)
+    {
+        fprintf(stderr, "[%s:%d %s] Failed to write header: %s\n", __FILE__,__LINE__,__FUNCTION__, file_name.c_str());
+        exit(1);
+    }
 }
 
 /**
@@ -164,7 +173,11 @@ void BCFOrderedWriter::write(bcf1_t *v)
     }
     else
     {
-        bcf_write(file, hdr, v);
+        if (bcf_write(file, hdr, v) < 0)
+        {
+            fprintf(stderr, "[%s:%d %s] Failed to write VCF/BCF record: %s\n", __FILE__,__LINE__,__FUNCTION__, file_name.c_str());
+            exit(1);
+        }
     }
 }
 
@@ -214,7 +227,11 @@ void BCFOrderedWriter::flush(bool force)
     {
         while (!buffer.empty())
         {
-            bcf_write(file, hdr, buffer.back());
+            if (bcf_write(file, hdr, buffer.back()) < 0)
+            {
+                fprintf(stderr, "[%s:%d %s] Failed to write VCF/BCF record: %s\n", __FILE__,__LINE__,__FUNCTION__, file_name.c_str());
+                exit(1);
+            }
             store_bcf1_into_pool(buffer.back());
             buffer.pop_back();
         }
@@ -229,7 +246,11 @@ void BCFOrderedWriter::flush(bool force)
             {
                 if (bcf_get_pos1(buffer.back())<=cutoff_pos1)
                 {
-                    bcf_write(file, hdr, buffer.back());
+                    if (bcf_write(file, hdr, buffer.back()) < 0)
+                    {
+                        fprintf(stderr, "[%s:%d %s] Failed to write VCF/BCF record: %s\n", __FILE__,__LINE__,__FUNCTION__, file_name.c_str());
+                        exit(1);
+                    }
                     store_bcf1_into_pool(buffer.back());
                     buffer.pop_back();
                 }
@@ -247,7 +268,13 @@ void BCFOrderedWriter::flush(bool force)
  */
 void BCFOrderedWriter::close()
 {
-    flush(true);
-    bcf_close(file);
+    if (file)
+    {
+        flush(true);
+
+        bcf_close(file);
+        file = nullptr;
+    }
     if (!linked_hdr && hdr) bcf_hdr_destroy(hdr);
+    hdr = nullptr;
 }
