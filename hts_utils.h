@@ -27,7 +27,7 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
-#include <cstdint>
+//#include <cstdint>
 #include <cstring>
 #include <cmath>
 #include <cfloat>
@@ -35,6 +35,9 @@
 #include <map>
 #include <queue>
 #include <sys/stat.h>
+
+extern "C" {
+#include "htslib/kseq.h"
 #include "htslib/kstring.h"
 #include "htslib/khash.h"
 #include "htslib/hts.h"
@@ -42,7 +45,20 @@
 #include "htslib/vcf.h"
 #include "htslib/bgzf.h"
 #include "htslib/faidx.h"
+#include "htslib/vcfutils.h"
+}
+
+//#ifdef __cplusplus
+//extern "C" {
+//#endif
+//  int ks_resize2(kstring_t*, unsigned long);
+//#ifdef __cplusplus
+//}
+//#endif
+
+
 #include "utils.h"
+#include "genome_interval.h"
 
 /**********
  *FAI UTILS
@@ -50,8 +66,7 @@
 typedef struct {
     int32_t line_len, line_blen;
     int64_t len;
-    uint64_t seq_offset;
-    uint64_t qual_offset;
+    uint64_t offset;
 } faidx1_t;
 
 KHASH_MAP_INIT_STR(s, faidx1_t)
@@ -113,6 +128,8 @@ void bam_hdr_transfer_contigs_to_bcf_hdr(const bam_hdr_t *sh, bcf_hdr_t *vh);
  * Gets the chromosome name of the tid.
  */
 #define bam_get_chrom(h, s) ((h)->target_name[(s)->core.tid])
+
+#define bam_get_chromi(h, i) ((h)->target_name[i])
 
 /**
  * Gets the 1 based start position of the first mapped base in the read.
@@ -475,6 +492,9 @@ void bcf_set_id(bcf1_t *v, char* id);
  */
 #define bcf_get_n_sample(v) ((v)->n_sample)
 
+const char* bcf_hdr_sample_id(bcf_hdr_t* h, int32_t idx);
+int32_t bcf_hdr_sample_index(bcf_hdr_t* h, const char* id);
+
 /**
  * Set number of samples in bcf record
  */
@@ -490,11 +510,23 @@ void bcf_set_id(bcf1_t *v, char* id);
  */
 #define bcf_set_qual(v, q) ((v)->qual = (q))
 
+void hprintf(htsFile* fp, const char * msg, ...);
+
+class GenomeInterval;
+void parse_intervals(std::vector<GenomeInterval>& intervals, std::string interval_list, std::string interval_string);
+
 std::string bam_hdr_get_sample_name(bam_hdr_t* hdr);
 
-void error(const char * msg, ...);
-void notice(const char * msg, ...);
+int32_t bam_get_unclipped_start(bam1_t* b);
+int32_t bam_get_unclipped_end(bam1_t* b);
+int32_t bam_get_clipped_end(bam1_t* b);
 
-std::string exec_cmd(const char* cmd);
+bool same_hrecs(bcf_hdr_t* dst_hdr, bcf_hrec_t* dst, bcf_hdr_t* src_hdr, bcf_hrec_t* src);
+
+char *samfaipath(const char *fn_ref);
+
+//bam_hdr_t *sam_hdr_sanitise(bam_hdr_t *h);
+
+//bam_hdr_t* bam_hdr_merge(std::vector<bam_hdr_t*>& hdrs);
 
 #endif

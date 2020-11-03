@@ -29,6 +29,7 @@
 #include "augmented_bam_record.h"
 #include "estimator.h"
 #include "sex_ploidy_map.h"
+#include "Error.h"
 
 #define FILTER_MASK_OVERLAP_SNP   0x0001
 #define FILTER_MASK_OVERLAP_INDEL 0x0002

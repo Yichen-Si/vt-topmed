@@ -24,6 +24,7 @@
 #ifndef JOINT_GENOTYPE_BLOCK_H
 #define JOINT_GENOTYPE_BLOCK_H
 
+#include "Error.h"
 #include "bam_ordered_reader.h"
 #include "bcf_ordered_reader.h"
 #include "bcf_ordered_writer.h"

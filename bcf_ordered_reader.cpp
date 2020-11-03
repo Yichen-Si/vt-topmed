@@ -93,8 +93,10 @@ BCFOrderedReader::BCFOrderedReader(std::string file_name, std::vector<GenomeInte
 	}
       }
       */
-      if ( !hdr ) 
-	error("[%s:%d %s] Failed to read header of the file %s", __FILE__, __LINE__, __PRETTY_FUNCTION__, file_name.c_str());
+      if ( !hdr ) {
+	fprintf(stderr,"[%s:%d %s] Failed to read header of the file %s", __FILE__, __LINE__, __PRETTY_FUNCTION__, file_name.c_str());
+	exit(1);
+      }
     }
 
     intervals_present =  intervals.size()!=0;

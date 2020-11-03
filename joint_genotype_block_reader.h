@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 #include <zlib.h>
+#include "Error.h"
 #include "htslib/kseq.h"
 #include "htslib/vcf.h"
 #include "hts_utils.h"

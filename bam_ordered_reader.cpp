@@ -23,25 +23,6 @@
 
 #include "bam_ordered_reader.h"
 
-char *samfaipath(const char *fn_ref)
-{
-    char *fn_list = 0;
-    if (fn_ref == 0) return 0;
-    fn_list = (char*) calloc(strlen(fn_ref) + 5, 1);
-    strcat(strcpy(fn_list, fn_ref), ".fai");
-    if (access(fn_list, R_OK) == -1) { // fn_list is unreadable
-        if (access(fn_ref, R_OK) == -1) {
-            fprintf(stderr, "[samfaipath] fail to read file %s.\n", fn_ref);
-        } else {
-            if (fai_build(fn_ref) == -1) {
-                fprintf(stderr, "[samfaipath] fail to build FASTA index.\n");
-                free(fn_list); fn_list = 0;
-            }
-        }
-    }
-    return fn_list;
-};
-
 /**
  * Initialize files, intervals and reference file.
  *
@@ -103,7 +84,10 @@ BAMOrderedReader::BAMOrderedReader(std::string file_name, std::vector<GenomeInte
     }
 
     hdr = sam_hdr_read(file);
-    if ( !hdr ) error("Failed to read the header of the file %s",file_name.c_str());
+    if ( !hdr ) {
+      fprintf(stderr,"Failed to read the header of the file %s",file_name.c_str());
+      exit(1);
+    }
     
     s = bam_init1();
 

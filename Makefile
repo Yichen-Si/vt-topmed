@@ -115,6 +115,7 @@ SOURCES = align\
 		tbx_ordered_reader\
 		ahmm\
 		xcmp\
+		Error\
 
 SOURCESONLY = main.cpp
 

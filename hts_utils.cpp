@@ -22,13 +22,11 @@
 */
 
 #include "hts_utils.h"
-
-#include <string>
-#include <cstdio>
-#include <cstdlib>
-#include <ctime>
-#include <stdarg.h>
-#include <stdexcept>
+extern "C" {
+#include "htslib/hfile.h"
+}
+#include "Error.h"
+#include <cassert>
 
 /********
  *General
@@ -36,6 +34,23 @@
 
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 typedef khash_t(vdict) vdict_t;
+
+//#ifdef __cplusplus
+//extern "C" {
+//#endif
+//  int ks_resize2(kstring_t*, unsigned long);
+//#ifdef __cplusplus
+//}
+//#endif
+
+//struct faidx_t {
+//    BGZF *bgzf;
+//    int n, m;
+//    char **name;
+//    khash_t(s) *hash;
+//    enum fai_format_options format;
+//};
+
 
 /**********
  *FAI UTILS
@@ -46,43 +61,43 @@ typedef khash_t(vdict) vdict_t;
  */
 char *faidx_fetch_uc_seq(const faidx_t *fai, const char *c_name, int p_beg_i, int p_end_i, int *len)
 {
-    int l;
-    char c;
-    khiter_t iter;
-    faidx1_t val;
-    char *seq=NULL;
+  char* seq = faidx_fetch_seq(fai, c_name, p_beg_i, p_end_i, len);
+  if ( *len > 0 ) {
+    for(int i=0; i < *len; ++i)
+      if ( isgraph(seq[i]) ) seq[i] = toupper(seq[i]);
+  }
+  return seq;
+    // int l;
+    // char c;
+    // khiter_t iter;
+    // faidx1_t val;
+    // char *seq=NULL;
 
-    // Adjust position
-    iter = kh_get(s, fai->hash, c_name);
-    if(iter == kh_end(fai->hash)) return 0;
-    val = kh_value(fai->hash, iter);
+    // // Adjust position
+    // iter = kh_get(s, fai->hash, c_name);
+    // if(iter == kh_end(fai->hash)) return 0;
+    // val = kh_value(fai->hash, iter);
+    // if(p_end_i < p_beg_i) p_beg_i = p_end_i;
+    // if(p_beg_i < 0) p_beg_i = 0;
+    // else if(val.len <= p_beg_i) p_beg_i = val.len - 1;
+    // if(p_end_i < 0) p_end_i = 0;
+    // else if(val.len <= p_end_i) p_end_i = val.len - 1;
 
-    if ( val.line_blen == 0 ) {
-       fprintf(stderr, "line_len = %u, line_blen = %u, len = %llu, seq_offset = %llu, qual_offset = %llu\n", val.line_len, val.line_blen, val.len, val.seq_offset, val.qual_offset);
-	abort();
-    }
-
-    if(p_end_i < p_beg_i) p_beg_i = p_end_i;
-    if(p_beg_i < 0) p_beg_i = 0;
-    //else if((uint64_t)(val.len-1) < (uint64_t)p_beg_u) p_beg_u = val.len - 1;
-    if(p_end_i < 0) p_end_i = 0;
-    //else if((uint64_t)(val.len-1) < (uint64_t)p_end_u) p_end_u = val.len - 1;
-
-    // Now retrieve the sequence
-    int ret = bgzf_useek(fai->bgzf, val.seq_offset + p_beg_i / val.line_blen * val.line_len + p_beg_i % val.line_blen, SEEK_SET);
-    if ( ret<0 )
-    {
-        *len = -1;
-        fprintf(stderr, "[fai_fetch_seq] Error: fai_fetch failed. (Seeking in a compressed, .gzi unindexed, file?)\n");
-        return NULL;
-    }
-    l = 0;
-    seq = (char*)malloc(p_end_i - p_beg_i + 2);
-    while ( (c=bgzf_getc(fai->bgzf))>=0 && l < p_end_i - p_beg_i + 1)
-        if (isgraph(c)) seq[l++] = toupper(c);
-    seq[l] = '\0';
-    *len = l;
-    return seq;
+    // // Now retrieve the sequence
+    // int ret = bgzf_useek(fai->bgzf, val.offset + p_beg_i / val.line_blen * val.line_len + p_beg_i % val.line_blen, SEEK_SET);
+    // if ( ret<0 )
+    // {
+    //     *len = -1;
+    //     fprintf(stderr,"[fai_fetch_seq] Error: fai_fetch failed. (Seeking in a compressed, .gzi unindexed, file?)\n");
+    //     return NULL;
+    // }
+    // l = 0;
+    // seq = (char*)malloc(p_end_i - p_beg_i + 2);
+    // while ( (c=bgzf_getc(fai->bgzf))>=0 && l < p_end_i - p_beg_i + 1)
+    //     if (isgraph(c)) seq[l++] = toupper(c);
+    // seq[l] = '\0';
+    // *len = l;
+    // return seq;
 }
 
 /**********
@@ -116,7 +131,7 @@ bool str_ends_with(std::string& file_name, const char* ext)
 void bam_hdr_transfer_contigs_to_bcf_hdr(const bam_hdr_t *sh, bcf_hdr_t *vh)
 {
     kstring_t s = {0,0,0};
-    for (size_t i=0; i<bam_hdr_get_n_targets(sh); ++i)
+    for (size_t i=0; i<(size_t)bam_hdr_get_n_targets(sh); ++i)
     {
         s.l = 0;
         ksprintf(&s, "##contig=<ID=%s,length=%d>", bam_hdr_get_target_name(sh)[i], bam_hdr_get_target_len(sh)[i]);
@@ -139,7 +154,7 @@ int32_t bam_get_end_pos1(bam1_t *s)
     if (n_cigar_op)
     {
         uint32_t *cigar = bam_get_cigar(s);
-        for (int32_t i = 0; i < n_cigar_op; ++i)
+        for (int32_t i = 0; i < (int32_t)n_cigar_op; ++i)
         {
             int32_t opchr = bam_cigar_opchr(cigar[i]);
             
@@ -190,7 +205,7 @@ void bam_get_cigar_string(bam1_t *s, kstring_t *cigar_string)
     if (n_cigar_op)
     {
         uint32_t *cigar = bam_get_cigar(s);
-        for (int32_t i = 0; i < n_cigar_op; ++i)
+        for (int32_t i = 0; i < (int32_t)n_cigar_op; ++i)
         {
             kputw(bam_cigar_oplen(cigar[i]), cigar_string);
             kputc(bam_cigar_opchr(cigar[i]), cigar_string);
@@ -245,7 +260,7 @@ void bam_get_cigar_expanded_string(bam1_t *s, kstring_t *cigar_expanded_string)
             }
 
             int32_t count = atoi(token.s);
-            for (uint32_t j=0; j<count; ++j)
+            for (int32_t j=0; j<count; ++j)
                 kputc(c, cigar_expanded_string);
             token.l = 0;;
         }
@@ -268,8 +283,7 @@ void bam_get_base_and_qual_and_read_and_qual(bam1_t *srec, uint32_t pos, char& b
     uint32_t cpos = c->pos; //reference coordinates of the first mapped base
     rpos = 0; //read coordinates
 
-    kstring_t str;
-    str.l = str.m = 0, str.s = 0;
+    kstring_t str = {0,0,0};
     base = 'N';
     qual = 0;
 
@@ -285,6 +299,8 @@ void bam_get_base_and_qual_and_read_and_qual(bam1_t *srec, uint32_t pos, char& b
             uint32_t len = strtol(str.s, &stop, 10);
             assert(stop);
 
+	    //fprintf(stderr,"%d%c",bam_cigar_oplen(cigar[i]),op);
+
             if (op=='M')
             {
                 if (pos>=cpos && pos<=cpos+len-1)
@@ -296,7 +312,7 @@ void bam_get_base_and_qual_and_read_and_qual(bam1_t *srec, uint32_t pos, char& b
                 cpos += len;
                 rpos += len;
             }
-            else if (op=='D')
+            else if ( ( op=='D' ) || ( op=='N' ) )
             {
                 if (pos>=cpos && pos<=cpos+len-1)
                 {
@@ -328,8 +344,17 @@ void bam_get_base_and_qual_and_read_and_qual(bam1_t *srec, uint32_t pos, char& b
             rpos = BAM_READ_INDEX_NA;
         }
     }
-//    std::cout << "b: " << base << "\n";
-//    std::cout << "q: " << s[bpos-1] << " " << q << "\n";
+    
+    if ( str.s ) free(str.s);
+
+    if ( rpos >= rlen ) {
+      rpos = BAM_READ_INDEX_NA;
+      base = '.';
+    }
+
+    //if ( rand() % 1000 == 0 )
+    //fprintf(stderr,", pos = %d, cpos = %d, b = %c, q = %c, rpos=%d, seq=%s, qual = %s\n", pos, cpos, base, qual, rpos, readseq->s, readqual->s);
+    //    std::cout << "q: " << s[bpos-1] << " " << q << "\n";
 //    for (uint32_t i = 0; i < c->l_qseq; ++i) std::cerr << ((char)(s[i] + 33));
 };
 
@@ -349,7 +374,7 @@ void bam_print(bam_hdr_t *h, bam1_t *s)
     bam_get_cigar_string(s, &cigar_string);
     kstring_t cigar_expanded_string = {0,0,0};
     bam_get_cigar_expanded_string(s, &cigar_expanded_string);
-    uint16_t flag = bam_get_flag(s);
+    //uint16_t flag = bam_get_flag(s);
     uint32_t mapq = bam_get_mapq(s);
 
     std::cerr << "##################" << "\n";
@@ -502,7 +527,7 @@ bcf_hdr_t *bcf_alt_hdr_read(htsFile *fp)
     }
     else
     {
-        fprintf(stderr, "[I:%s:%d %s] read alternative header for %s\n", __FILE__, __LINE__, __FUNCTION__, fp->fn);
+        fprintf(stderr,"[I:%s:%d %s] read alternative header for %s\n", __FILE__, __LINE__, __FUNCTION__, fp->fn);
         fclose(file);
         htsFile *alt_hdr = hts_open(alt_hdr_fn.s, "r");
         h = bcf_hdr_read(alt_hdr);
@@ -515,6 +540,15 @@ bcf_hdr_t *bcf_alt_hdr_read(htsFile *fp)
 
     if (alt_hdr_fn.m) free(alt_hdr_fn.s);
     return h;
+}
+
+int32_t bcf_hdr_sample_index(bcf_hdr_t* h, const char* id) {
+  return bcf_hdr_id2int(h, BCF_DT_SAMPLE, id);
+}
+
+const char* bcf_hdr_sample_id(bcf_hdr_t* h, int32_t idx) {
+  //return (const char*)(h->id[BCF_DT_SAMPLE][idx]);
+  return bcf_hdr_int2id(h, BCF_DT_SAMPLE, idx);
 }
 
 /**
@@ -858,7 +892,7 @@ void bcf_variant2string_sorted(bcf_hdr_t *h, bcf1_t *v, kstring_t *var)
         }
         std::qsort(temp, bcf_get_n_allele(v), sizeof(char*), cmpstr);
         kputs(bcf_get_alt(v, 0), var);
-        for (size_t i=0; i<v->n_allele-1; ++i)
+        for (int32_t i=0; i<v->n_allele-1; ++i)
         {
             kputc(',', var);
             kputs(temp[i], var);
@@ -935,13 +969,13 @@ const char* bcf_get_chrom(bcf_hdr_t *h, bcf1_t *v)
 {
     if (v->rid >= h->n[BCF_DT_CTG])
     {
-        fprintf(stderr, "[E:%s:%d %s] rid '%d' does not have an associated contig defined in the header.  Try tabix workaround or just add the header.\n", __FILE__, __LINE__, __FUNCTION__, v->rid);
-        exit(1);
+      error("[E:%s:%d %s] [E:%s:%d %s] rid '%d' does not have an associated contig defined in the header.  Try tabix workaround or just add the header.\n",__FILE__,__LINE__,__FUNCTION__, __FILE__, __LINE__, __FUNCTION__, v->rid);
+      //exit(1);
+      //return NULL;
     }
-    else
-    {
-        return h->id[BCF_DT_CTG][v->rid].key;
-    }
+    else if ( v->rid < 0 ) return NULL;
+    
+    return h->id[BCF_DT_CTG][v->rid].key;
 }
 
 /**
@@ -953,7 +987,7 @@ void bcf_set_chrom(bcf_hdr_t *h, bcf1_t *v, const char* chrom)
     khint_t k = kh_get(vdict, d, chrom);
     if (k == kh_end(d))
     {
-        fprintf(stderr, "[E:%s:%d %s] contig '%s' is not defined in the header\n", __FILE__, __LINE__, __FUNCTION__, chrom);
+      error("[E:%s:%d %s] [E:%s:%d %s] contig '%s' is not defined in the header\n",__FILE__,__LINE__,__FUNCTION__, __FILE__, __LINE__, __FUNCTION__, chrom);
         kstring_t contig = {0,0,0};
         ksprintf(&contig, "##contig=<ID=%s,length=2147483647>", chrom);
         bcf_hdr_append(h, contig.s);
@@ -976,99 +1010,12 @@ void bcf_set_id(bcf1_t *v, char* id)
     v->d.id = strdup(id);
 };
 
-std::string bam_hdr_get_sample_name(bam_hdr_t* hdr) {
-  if ( !hdr )
-    error("Failed to read the BAM header");
-
-  const char *p = hdr->text;
-  const char *q, *r;
-  int n = 0;
-  std::string sm;
-  while( ( q = strstr(p, "@RG" ) ) != 0 ) {
-    p = q + 3;
-    r = q = 0;
-    if ( ( q = strstr(p, "\tID:" ) ) != 0 ) q += 4;
-    if ( ( r = strstr(p, "\tSM:" ) ) != 0 ) r += 4;
-    if ( r && q ) {
-      char *u, *v;
-      for (u = (char*)q; *u && *u != '\t' && *u != '\n'; ++u);
-      for (v = (char*)r; *v && *v != '\t' && *v != '\n'; ++v);
-      *u = *v = '\0';
-      if ( sm.empty() )
-	sm = r;
-      else if ( sm.compare(r) != 0 )
-	error("Multiple sample IDs are included in one BAM file - %s, %s", sm.c_str(), r);
-    }
-    else break;
-    p = q > r ? q : r;
-    ++n;
-  }
-  if ( sm.empty() )
-    error("Sample ID information cannot be found");
-  return sm;
-}
-
-void error(const char * msg, ...)
-{
-  va_list  ap;
-
-  va_start(ap, msg);
-
-  fprintf(stderr, "\nFATAL ERROR - \n");
-  vfprintf(stderr, msg, ap);
-  fprintf(stderr, "\n\n");
-
-  va_end(ap);
-
-  abort();
-  //throw pexception;
-  //exit(EXIT_FAILURE);
-}
-
-void notice(const char * msg, ...) {
-  va_list ap;
-  va_start(ap, msg);
-
-  time_t current_time;
-  char buff[255];
-  current_time = time(NULL);
-
-  strftime(buff, 120, "%Y/%m/%d %H:%M:%S", localtime(&current_time));
-
-  fprintf(stderr,"NOTICE [%s] - ", buff);
-  vfprintf(stderr, msg, ap);
-  fprintf(stderr,"\n");
-
-  va_end(ap);
-}
-
-std::string exec_cmd(const char* cmd) {
-  char buffer[128];
-  std::string result = "";
-  FILE* pipe = popen(cmd, "r");
-  if (!pipe) error("Failed to run popen() with command : %s",cmd);
-  try {
-    while (!feof(pipe)) {
-      if (fgets(buffer, 128, pipe) != NULL)
-	result += buffer;
-    }
-  } catch (...) {
-    pclose(pipe);
-    error("Errors in reading from pipe command : %s", cmd);
-    //throw;
-  }
-  pclose(pipe);
-  return result;
-}
-
-/*
 void hprintf(htsFile* fp, const char * msg, ...) {
   va_list ap;
 
   va_start(ap, msg);
 
   kstring_t tmp = {0,0,0};
-  //int l =
   kvsprintf(&tmp, msg, ap);
 
   int ret;
@@ -1084,5 +1031,286 @@ void hprintf(htsFile* fp, const char * msg, ...) {
   }
 
   va_end(ap);
+}
+
+void parse_intervals(std::vector<GenomeInterval>& intervals, std::string interval_list, std::string interval_string)
+{
+    intervals.clear();
+    std::map<std::string, uint32_t> m;
+
+    if (interval_list!="")
+    {
+        htsFile *file = hts_open(interval_list.c_str(), "r");
+        if (file)
+        {
+            kstring_t *s = &file->line;
+            while (hts_getline(file, '\n', s)>=0)
+            {
+                std::string ss = std::string(s->s);
+                if (m.find(ss)==m.end())
+                {
+                    m[ss] = 1;
+                    GenomeInterval interval(ss);
+                    intervals.push_back(interval);
+                }
+            }
+            hts_close(file);
+        }
+    }
+
+    std::vector<std::string> v;
+    if (interval_string!="")
+        split(v, ",", interval_string);
+
+    for (size_t i=0; i<v.size(); ++i)
+    {
+        if (m.find(v[i])==m.end())
+        {
+            m[v[i]] = 1;
+            GenomeInterval interval(v[i]);
+            intervals.push_back(interval);
+        }
+    }
+}
+
+std::string bam_hdr_get_sample_name(bam_hdr_t* hdr) {
+  if ( !hdr )
+    error("[E:%s:%d %s] [E:%s:%d %s] Failed to read the BAM header",__FILE__,__LINE__,__FUNCTION__,__FILE__, __LINE__, __FUNCTION__);
+
+  char *ptext = strdup(hdr->text);  
+  const char *p = ptext; 
+  const char *q, *r;
+  int32_t n = 0;
+  std::string sm;
+  while( ( q = strstr(p, "@RG" ) ) != 0 ) {
+    p = q + 3;
+    r = q = 0;
+    if ( ( q = strstr(p, "\tID:" ) ) != 0 ) q += 4;
+    if ( ( r = strstr(p, "\tSM:" ) ) != 0 ) r += 4;
+    if ( r && q ) {
+      char *u, *v;
+      for (u = (char*)q; *u && *u != '\t' && *u != '\n'; ++u);
+      for (v = (char*)r; *v && *v != '\t' && *v != '\n'; ++v);
+      *u = *v = '\0';
+      if ( sm.empty() )
+	sm = r;
+      else if ( sm.compare(r) != 0 ) {
+	error("[E:%s:%d %s] [E:%s:%d %s] Multiple sample IDs are included in one BAM file - %s, %s",__FILE__,__LINE__,__FUNCTION__, __FILE__, __LINE__, __FUNCTION__, sm.c_str(), r);
+	//abort();
+      }
+    }
+    else break;
+    p = q > r ? q : r;
+    ++n;
+  }
+  if ( sm.empty() ) {
+    warning("[W:%s:%d %s] Sample ID information cannot be found",__FILE__,__LINE__,__FUNCTION__);
+  }
+  free(ptext);
+  return sm;
+}
+
+int32_t bam_get_unclipped_start(bam1_t* b) {
+  uint32_t* cigar = bam_get_cigar(b);
+  bam1_core_t* c = &b->core;
+  int32_t i, y;
+  for(i = y =0; i < (int32_t)c->n_cigar; ++i) {
+    int l = cigar[i]>>4, op = cigar[i]&0xf;
+    if ( ( op == BAM_CSOFT_CLIP ) || ( op == BAM_CHARD_CLIP ) )
+      y += l;
+    else
+      return ( c->pos - y );
+  }
+  return ( c->pos - y );
+}
+
+int32_t bam_get_unclipped_end(bam1_t* b) {
+  uint32_t* cigar = bam_get_cigar(b);
+  bam1_core_t* c = &b->core;
+  int32_t i, y;
+  for(i = y = 0; i < (int32_t)c->n_cigar; ++i) {
+    int l = cigar[i]>>4, op = cigar[i]&0xf;
+    switch( op ) {
+    case BAM_CMATCH:
+    case BAM_CEQUAL:
+    case BAM_CDIFF:
+    case BAM_CDEL:
+    case BAM_CREF_SKIP:      
+    case BAM_CSOFT_CLIP:
+    case BAM_CHARD_CLIP:      
+      y += l;
+      //case BAM_CINS:
+      //case BAM_CPAD:
+      //case BAM_CBACK:
+    }
+  }
+  return ( c->pos + y );  
+}
+
+int32_t bam_get_clipped_end(bam1_t* b) {
+  uint32_t* cigar = bam_get_cigar(b);
+  bam1_core_t* c = &b->core;
+  int32_t i, y;
+  for(i = y = 0; i < (int32_t)c->n_cigar; ++i) {
+    int l = cigar[i]>>4, op = cigar[i]&0xf;
+    switch( op ) {
+    case BAM_CMATCH:
+    case BAM_CEQUAL:
+    case BAM_CDIFF:
+    case BAM_CDEL:
+    case BAM_CREF_SKIP:      
+      //case BAM_CSOFT_CLIP:
+      //case BAM_CHARD_CLIP:      
+      y += l;
+      //case BAM_CINS:
+      //case BAM_CPAD:
+      //case BAM_CBACK:
+    }
+  }
+  return ( c->pos + y );  
+}
+
+
+bool same_hrecs(bcf_hdr_t* dst_hdr, bcf_hrec_t* dst, bcf_hdr_t* src_hdr, bcf_hrec_t* src) {
+  // Check that both records are of the same type. The bcf_hdr_id2length
+  // macro cannot be used here because dst header is not synced yet.
+  vdict_t *d_src = (vdict_t*)src_hdr->dict[BCF_DT_ID];
+  vdict_t *d_dst = (vdict_t*)dst_hdr->dict[BCF_DT_ID];
+  khint_t k_src  = kh_get(vdict, d_src, src->vals[0]);
+  khint_t k_dst  = kh_get(vdict, d_dst, src->vals[0]);
+  if ( (kh_val(d_src,k_src).info[src->type]>>8 & 0xf) != (kh_val(d_dst,k_dst).info[dst->type]>>8 & 0xf) ) {
+    warning("Warning: trying to combine \"%s\" tag definitions of different lengths\n", src->vals[0]);
+    return false;
+  }
+  if ( (kh_val(d_src,k_src).info[src->type]>>4 & 0xf) != (kh_val(d_dst,k_dst).info[dst->type]>>4 & 0xf) ) {
+    warning("Warning: trying to combine \"%s\" tag definitions of different types\n", src->vals[0]);
+    return false;
+  }
+  return true;
+}
+
+char *samfaipath(const char *fn_ref)
+{
+    char *fn_list = 0;
+    if (fn_ref == 0) return 0;
+    fn_list = (char*) calloc(strlen(fn_ref) + 5, 1);
+    strcat(strcpy(fn_list, fn_ref), ".fai");
+    if (access(fn_list, R_OK) == -1) { // fn_list is unreadable
+        if (access(fn_ref, R_OK) == -1) {
+            fprintf(stderr, "[samfaipath] fail to read file %s.\n", fn_ref);
+        } else {
+            if (fai_build(fn_ref) == -1) {
+                fprintf(stderr, "[samfaipath] fail to build FASTA index.\n");
+                free(fn_list); fn_list = 0;
+            }
+        }
+    }
+    return fn_list;
+};
+
+/*
+// Minimal sanitisation of a header to ensure.
+// - null terminated string.
+// - all lines start with @ (also implies no blank lines).
+//
+// Much more could be done, but currently is not, including:
+// - checking header types are known (HD, SQ, etc).
+// - syntax (eg checking tab separated fields).
+// - validating n_targets matches @SQ records.
+// - validating target lengths against @SQ records.
+bam_hdr_t *sam_hdr_sanitise(bam_hdr_t *h) {
+    if (!h)
+        return NULL;
+
+    // Special case for empty headers.
+    if (h->l_text == 0)
+        return h;
+
+    uint32_t i, lnum = 0;
+    char *cp = h->text, last = '\n';
+    for (i = 0; i < h->l_text; i++) {
+        // NB: l_text excludes terminating nul.  This finds early ones.
+        if (cp[i] == 0)
+            break;
+
+        // Error on \n[^@], including duplicate newlines
+        if (last == '\n') {
+            lnum++;
+            if (cp[i] != '@') {
+                error("Malformed SAM header at line %u", lnum);
+                bam_hdr_destroy(h);
+                return NULL;
+            }
+        }
+
+        last = cp[i];
+    }
+
+    if (i < h->l_text) { // Early nul found.  Complain if not just padding.
+        uint32_t j = i;
+        while (j < h->l_text && cp[j] == '\0') j++;
+        if (j < h->l_text)
+            warning("Unexpected NUL character in header. Possibly truncated");
+    }
+
+    // Add trailing newline and/or trailing nul if required.
+    if (last != '\n') {
+        warning("Missing trailing newline on SAM header. Possibly truncated");
+
+        if (h->l_text == UINT32_MAX) {
+            error("No room for extra newline");
+            bam_hdr_destroy(h);
+            return NULL;
+        }
+
+        if (i >= h->l_text - 1) {
+	  cp = (char*)realloc(h->text, (size_t) h->l_text+2);
+            if (!cp) {
+                bam_hdr_destroy(h);
+                return NULL;
+            }
+            h->text = cp;
+        }
+        cp[i++] = '\n';
+
+        // l_text may be larger already due to multiple nul padding
+        if (h->l_text < i)
+            h->l_text = i;
+        cp[h->l_text] = '\0';
+    }
+
+    return h;
+}
+*/
+
+/*
+bam_hdr_t* bam_hdr_merge(std::vector<bam_hdr_t*> hdrs) {
+  bam_hdr_t* merged_hdr* merged_hdr =
+
+merged_header_t *merged_hdr;
+
+    merged_hdr = calloc(1, sizeof(*merged_hdr));
+    if (merged_hdr == NULL) return NULL;
+
+    merged_hdr->targets_sz   = 16;
+    merged_hdr->target_name = malloc(merged_hdr->targets_sz
+                                     * sizeof(*merged_hdr->target_name));
+    if (NULL == merged_hdr->target_name) goto fail;
+
+    merged_hdr->target_len = malloc(merged_hdr->targets_sz
+                                    * sizeof(*merged_hdr->target_len));
+    if (NULL == merged_hdr->target_len) goto fail;
+
+    merged_hdr->sq_tids = kh_init(c2i);
+    if (merged_hdr->sq_tids == NULL) goto fail;
+
+    merged_hdr->rg_ids = kh_init(cset);
+    if (merged_hdr->rg_ids == NULL) goto fail;
+
+    merged_hdr->pg_ids = kh_init(cset);
+    if (merged_hdr->pg_ids == NULL) goto fail;
+
+    return merged_hdr;
+    
 }
 */
