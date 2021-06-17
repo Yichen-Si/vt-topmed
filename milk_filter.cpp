@@ -53,10 +53,10 @@ class Igor : Program
     ///////
     //i/o//
     ///////
-    BCFOrderedReader *odr;
-    BCFOrderedWriter *odw;
-    NuclearPedigree  *ped;
-    Estimator *est;
+    BCFOrderedReader *odr = nullptr;
+    BCFOrderedWriter *odw = nullptr;
+    NuclearPedigree  *ped = nullptr;
+    Estimator *est = nullptr;
 
     std::map<std::string,int> mSex;
 
@@ -141,7 +141,7 @@ class Igor : Program
             std::cerr << "error: " << e.error() << " for arg " << e.argId() << "\n";
             abort();
         }
-    };
+    }
 
     void initialize()
     {
@@ -865,10 +865,9 @@ class Igor : Program
       fprintf(stderr,"Procesed %d variants and skipped %d non-biallelic variants\n", nread, nskip);
 
       odw->close();
-      delete odw;
 
       fprintf(stderr,"Finished writing output VCF/BCF file\n");
-    };
+    }
 
     void print_options()
     {
@@ -887,9 +886,15 @@ class Igor : Program
         std::clog << "\n";
         //std::cerr << "stats: Total number of files pasted  " << input_vcf_files.size() << "\n";
         std::clog << "\n";
-    };
+    }
 
-    ~Igor() {};
+    ~Igor() 
+    {
+      if (odr) delete odr;
+      if (odw) delete odw;
+      if (ped) delete ped;
+      if (est) delete est;
+    }
 
     private:
 };
