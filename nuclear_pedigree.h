@@ -43,10 +43,6 @@
  * A class for storing nuclear family allowing duplicates
  *
  */
-class NuclearFamilySample;
-class NuclearFamilyPerson;
-class NuclearFamily;
-class NuclearPedigree;
 
 class NuclearFamilySample {  // Represents each sequenced/genotyped sample.
  public:
@@ -68,7 +64,7 @@ class NuclearFamilyPerson {  // represents each individuals
     }
     return false;
   }
-  bool addSample(NuclearFamilySample* pSample) { samples.push_back(pSample); }
+  void addSample(NuclearFamilySample* pSample) { samples.push_back(pSample); }
   int removeSamplesWithoutIndex(std::map<std::string,NuclearFamilySample*>& smIDmap) {
     int nRemoved = 0;
     for(int i=(int)samples.size()-1; i >= 0; --i) {
