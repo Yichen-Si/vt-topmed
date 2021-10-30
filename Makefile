@@ -1,6 +1,6 @@
 OPTFLAG = -g -O3 -fopenmp
 INCLUDES = -I./lib -I. -I../htslib -I./lib/Rmath -I./lib/pcre2
-CFLAGS = -pipe -std=c++0x $(OPTFLAG) $(INCLUDES) -D__STDC_LIMIT_MACROS
+CFLAGS = -pipe -std=c++0x $(OPTFLAG) $(INCLUDES) -D__STDC_LIMIT_MACROS -no-pie
 CXX = g++
 
 SOURCESONLY =
@@ -129,10 +129,10 @@ LIBPCRE2 = lib/pcre2/libpcre2.a
 all : $(TARGET)
 
 ${LIBHTS} :
-	cd ../htslib; $(MAKE) libhts.a || exit 1; 
+	cd ../htslib; $(MAKE) libhts.a || exit 1;
 
 ${LIBRMATH} :
-	cd lib/Rmath; $(MAKE) libRmath.a || exit 1; 
+	cd lib/Rmath; $(MAKE) libRmath.a || exit 1;
 
 ${LIBPCRE2} :
 	cd lib/pcre2; $(MAKE) libpcre2.a || exit 1;
@@ -154,7 +154,7 @@ clean :
 	-rm -rf $(TARGET) $(TOOLOBJ)
 
 cleanvt :
-	-rm -rf $(TARGET) $(TOOLOBJ)    
+	-rm -rf $(TARGET) $(TOOLOBJ)
 
 test: vt
 	for x in ./test/*/_run.sh; do \

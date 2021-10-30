@@ -59,6 +59,9 @@ VNTRAnnotator::VNTRAnnotator(std::string& ref_fasta_file, bool debug)
 
     this->debug = debug;
     qual.assign(2048, 'K');
+
+    min_ecover_indel = 0.5; min_pcover_indel = 0.5;
+    min_ecover_extended = 0.3; min_pcover_extended = 0.3;
 };
 
 /**
@@ -66,14 +69,18 @@ VNTRAnnotator::VNTRAnnotator(std::string& ref_fasta_file, bool debug)
  */
 VNTRAnnotator::~VNTRAnnotator()
 {
+
+if (debug) {
+    std::cerr << "VNTRAnnotator Destructor\n";
+}
     delete vm;
     fai_destroy(fai);
-
     if (factors)
     {
         for (size_t i=1; i<=max_len; ++i)
         {
-            free(factors[i]);
+            if (factors[i])
+                free(factors[i]);
         }
         free(factors);
     }
@@ -85,405 +92,244 @@ VNTRAnnotator::~VNTRAnnotator()
  */
 void VNTRAnnotator::annotate(bcf_hdr_t* h, bcf1_t* v, Variant& variant, std::string mode)
 {
-    VNTR& vntr = variant.vntr;
+    if (!(variant.type&VT_INDEL)) {
+        return;
+    }
 
-    //update chromosome and position
+    std::set<candidate_unit> candidate_ru;
+    // VNTR& vntr = variant.vntr;
     variant.rid = bcf_get_rid(v);
     variant.pos1 = bcf_get_pos1(v);
 
-    //this is for reannotating an VNTR record
-    //this is more for the purpose of evaluation to
-    //check if vt's algorithm is concordant with
-    //VNTRs from other sources.
-    if (variant.type==VT_VNTR)
-    {
-        if (debug) std::cerr << "ANNOTATING VNTR/STR \n";
+    //1. detect candidate repeat units
+    //2. for each candidate, detect repeat region and evaluate
+    //3. choose the best repeat unit and track
 
-        //1. pick candidate region
-        vntr.repeat_tract.assign(bcf_get_ref(v));
-        vntr.rbeg1 = bcf_get_pos1(v);
-        char** alleles = bcf_get_allele(v);
-        vntr.rend1 = strlen(alleles[0]);
- //       pick_candidate_region(h, v, vntr, REFERENCE);
+    // if (debug) std::cerr << "============================================\n";
+    // if (debug) std::cerr << "ANNOTATING INDEL\n";
+    //1. detect candidate repeat units
+    find_repeat_unit(h, v, candidate_ru);
 
-        //2. detect candidate motifs from a reference seqeuence
-        pick_candidate_motifs(h, v, variant);
+    // if (debug) std::cerr << "============================================\n";
+    return;
 
-        //3. choose the best candidate motif
-        choose_best_motif(h, v, mt, vntr, REFERENCE);
+}
+
+void VNTRAnnotator::find_repeat_unit(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru) {
+
+    int32_t pos1 = v->pos + 1;
+    int32_t st_rel = 0, ed_rel = 0;
+    const char* chrom = bcf_get_chrom(h, v);
+    char** alleles = bcf_get_allele(v);
+    std::string focal_seq(alleles[0]);
+    int32_t indel_end = pos1 + focal_seq.size() - 1; // 1-based, inclusive
+    if (strlen(alleles[1]) > focal_seq.size()) {
+        focal_seq = alleles[1];
+        // indel_end = pos1;
     }
-    //main purpose - annotation of Indels.
-    else if (variant.type&VT_INDEL)
-    {
-        //the basic steps in annotating a TR
-        //
-        //1. extract a region that has a chance of containing the repeat units
-        //2. choose a set of candidate motifs
-        //3. choose the motif
-        //4. detect repeat region and evaluate
-
-        //EXACT MODE
-        if (mode=="e")
-        {
-            if (debug) std::cerr << "============================================\n";
-            if (debug) std::cerr << "ANNOTATING INDEL EXACTLY\n";
-
-            //1. pick candidate region using exact left and right alignment
-            cre->extract_regions_by_exact_alignment(h, v, vntr);
-
-            //2. detect candidate motifs from a reference sequence
-            pick_candidate_motifs(h, v, variant);
-
-            //3. choose the best candidate motif
-            choose_best_motif(h, v, mt, vntr, PICK_BEST_MOTIF);
-
-            //4. evaluate reference length
-            fd->detect_flanks(h, v, variant, CLIP_ENDS);
-
-            if (debug) std::cerr << "============================================\n";
+    focal_seq = focal_seq.substr(1); // only keep the inserted or deleted seq
+if (debug) {
+    std::cerr << "============================================\n";
+    std::cerr << "Read indel: " << pos1 << '\t' << alleles[0] << '\t' << alleles[1] << '\t' << focal_seq << std::endl;
+}
+    // check if it is an indel inside homopolymer
+    char b;
+    int32_t homopoly = if_homopoly(chrom, pos1-1, indel_end, b);
+    if (homopoly > HOMOPOLYMER_MIN) {
+        if (focal_seq.size() < 4) {
+            bcf_add_filter(h, v, bcf_hdr_id2int(h, BCF_DT_ID, "overlap_homopolymer"));
             return;
-        }
-        //FUZZY DETECTION
-        else if (mode=="f")
-        {
-            if (debug) std::cerr << "============================================\n";
-            if (debug) std::cerr << "ANNOTATING INDEL FUZZILY\n";
-
-            //1. selects candidate region by fuzzy left and right alignment
-            cre->extract_regions_by_exact_alignment(h, v, vntr);
-
-            //2. detect candidate motifs from candidate region
-            pick_candidate_motifs(h, v, variant);
-
-            //3. choose the best candidate motif
-            choose_best_motif(h, v, mt, vntr, PICK_BEST_MOTIF);
-
-            //4. evaluate reference length
-            fd->detect_flanks(h, v, variant, FRAHMM);
-
-            if (debug) std::cerr << "============================================\n";
-            return;
+        } else {
+            // Check if the indel is homopolymer itself
+            int32_t same_base = 0;
+            for (size_t i = 0; i < focal_seq.size(); ++i) {
+                if (focal_seq.at(i) == b) {same_base++;}
+            }
+            if (same_base == focal_seq.size()) {
+                bcf_add_filter(h, v, bcf_hdr_id2int(h, BCF_DT_ID, "overlap_homopolymer"));
+                return;
+            }
         }
     }
+    if (focal_seq.size() == 1) {
+        return;
+    }
+
+    // extend in both direction (small region)
+    int32_t slen = std::min((int32_t)focal_seq.size() * 6, 64);
+    int32_t ct_indel = 0;
+    ct_indel += og_find_repeat_unit(focal_seq, candidate_ru, 1);
+    ct_indel += rl_find_repeat_unit(focal_seq, candidate_ru, 1);
+    if (focal_seq.size() < slen) {
+        int32_t pad = (int32_t) ((slen - focal_seq.size() + 1) / 2);
+        int32_t seq_len;
+        std::string extended_seq = faidx_fetch_seq(fai, chrom, std::max(0, pos1 - pad), pos1 - 1, &seq_len);
+        st_rel = extended_seq.size();
+        extended_seq += focal_seq;
+        ed_rel = extended_seq.size() - 1;
+        extended_seq += faidx_fetch_seq(fai, chrom, indel_end, indel_end + pad - 1, &seq_len);
+if (debug) {
+    std::cerr << "Extended sequence: " << slen << '\t' << focal_seq << '\t' << extended_seq << '\t' << st_rel  << ',' << ed_rel << std::endl;
+}
+        int32_t ct_extnd = 0;
+        ct_extnd += rl_find_repeat_unit(extended_seq, candidate_ru, 0);
+        ct_extnd += og_find_repeat_unit(extended_seq, candidate_ru, 0);
+        if (ct_indel == 0 && focal_seq.size() > 4) {
+            if (extended_seq.substr(ed_rel+1,focal_seq.size()).compare(focal_seq) == 0 ||
+                extended_seq.find(focal_seq) <= st_rel-focal_seq.size()) {
+                    candidate_ru.insert(candidate_unit(focal_seq));
+                }
+        }
+    }
+
+
+if (debug) {
+    std::cerr << "Identified " << candidate_ru.size() << " candidates\n";
+    for (const auto& s : candidate_ru) {
+        std::cerr << s.ru << ' ' << s.inexact << '\t';
+    }
+    std::cerr << std::endl;
+}
+    return;
 }
 
 /**
- * Pick candidate motifs in different modes.
- * Invokes motif tree and the candidate motifs are stored in a
- * heap within the motif tree.
+ * Find periodic subsequence
  */
-void VNTRAnnotator::pick_candidate_motifs(bcf_hdr_t* h, bcf1_t* v, Variant& variant)
-{
-    if (debug)
-    {
-        std::cerr << "********************************************\n";
-        std::cerr << "PICK CANDIDATE MOTIFS\n\n";
-    }
-
-    if (variant.ins && variant.alleles.size()==1)
-    {   
-        char** alleles = bcf_get_allele(v);
-        
-        if (debug)
-        {     
-            const char* repeat_tract = variant.vntr.repeat_tract.c_str();
-            std::cerr << "Longest Allele : "   << alleles[0][0] << "[" <<  &alleles[1][1]  << "]" << &repeat_tract[1] << "\n"; 
+int32_t VNTRAnnotator::og_find_repeat_unit(std::string& context, std::set<candidate_unit>& candidate_ru, bool flag) {
+    int32_t added_ct = 0;
+    if (context.size() > 2) {
+        periodic_seq pseq_obj(context.c_str(), max_mlen, debug);
+        if (flag) {
+            pseq_obj.get_candidate(min_ecover_indel, min_pcover_indel);
+        } else {
+            pseq_obj.get_candidate(min_ecover_extended, min_pcover_extended);
         }
-        
-        //spike in inserted allele
-        std::string spiked_seq(alleles[1]);
-        std::string insertion = variant.vntr.repeat_tract.substr(strlen(alleles[0]), variant.vntr.repeat_tract.size()-strlen(alleles[0]));
-        spiked_seq.append(insertion); 
-           
-        
-        mt->detect_candidate_motifs(spiked_seq);   
+        if (pseq_obj.candidate.size() > 0) {
+            for (const auto& s: pseq_obj.candidate) {
+                if (context.find(s) == std::string::npos) {
+                    continue;
+                }
+                candidate_unit tmp(s,0);
+                candidate_ru.insert(tmp);
+                added_ct++;
+            }
+        }
     }
-    else
-    {
-        mt->detect_candidate_motifs(variant.vntr.repeat_tract);
-    }
+    return added_ct;
 }
 
 /**
- * Chooses a phase of the motif that is appropriate for the alignment
+ * Find periodic subsequence ignoring repeats of a single base
  */
-void VNTRAnnotator::choose_best_motif(bcf_hdr_t* h, bcf1_t* v, MotifTree* mt, VNTR& vntr, uint32_t mode)
-{
-    if (debug)
-    {
-        std::cerr << "********************************************\n";
-        std::cerr << "PICK BEST MOTIF\n\n";
+int32_t VNTRAnnotator::rl_find_repeat_unit(std::string& context, std::set<candidate_unit>& candidate_ru, bool flag) {
+
+    int32_t added_ct = 0;
+    std::string cseq = "";
+    cseq += context.at(0);
+    std::vector<int32_t> rl;
+    char pre_base = context.at(0);
+    std::map<char, int32_t> base_ct;
+    for (auto& s : alphabet) {
+        base_ct[s] = 0;
     }
-
-    if (mode==PICK_BEST_MOTIF)
-    {
-        if (!mt->pcm.empty())
-        {
-            CandidateMotif cm = mt->pcm.top();
-
-            vntr.motif = cm.motif;
-            vntr.mlen = cm.motif.size();
-            vntr.motif_score = cm.score;
-
-//            if (cm.motif.size()==1)
-//            {    
-//                if (cm.score>0.8)
-//                {
-//                    vntr.motif = cm.motif;
-//                    vntr.mlen = cm.motif.size();
-//                    vntr.motif_score = cm.score;
-//                }
-//                else
-//                {
-//                    while ()
-//                    {
-//                        mt->pcm.pop();
-//                
-//                    cm = mt->pcm.top();
-//                    vntr.motif = cm.motif;
-//                    vntr.mlen = cm.motif.size();
-//                    vntr.motif_score = cm.score;
-//                }
-//            }
-//            else if (cm.motif.size()>1)
-//            {
-//                if (cm.score>0.7)
-//                {    
-//                    vntr.motif = cm.motif;
-//                    vntr.mlen = cm.motif.size();
-//                    vntr.motif_score = cm.score;
-//                }
-//                else
-//                {
-//                    mt->pcm.pop();
-//                
-//                    cm = mt->pcm.top();
-//                    vntr.motif = cm.motif;
-//                    vntr.mlen = cm.motif.size();
-//                    vntr.motif_score = cm.score; 
-//                }
-//            }
-//            else
-//            {
-//                vntr.motif = cm.motif;
-//                vntr.mlen = cm.motif.size();
-//                vntr.motif_score = cm.score;
-//            }
-        }
-
-        if (debug)
-        {
-            printf("selected: %10s %.2f %.2f %.2f %.2f (%d/%d)\n", mt->pcm.top().motif.c_str(),
-                                                            mt->pcm.top().score,
-                                                            mt->pcm.top().fit,
-                                                            ahmm->get_motif_concordance(),
-                                                            (float)ahmm->get_exact_motif_count()/ahmm->get_motif_count(),
-                                                            ahmm->get_exact_motif_count(),
-                                                            ahmm->get_motif_count());
-        }
+    int32_t uninfo = 0;
+    int32_t ct = 1;
+    for (uint32_t i = 1; i < context.size(); ++i) {
+        if (context.at(i) != pre_base) {
+            if (base_ct.find(context.at(i))==base_ct.end()) {
+                uninfo++;
+                continue;
+            }
+            cseq += context.at(i);
+            base_ct[context.at(i)] += 1;
+            rl.push_back(ct);
+            pre_base = context.at(i);
+            ct = 1;
+        } else {ct++;}
     }
-    else if (mode==10) //backup plan to make sense of.
-    {
-        //choose candidate motif
-        bool first = true;
-        float cp = 0;
-        float mscore = 0;
-        uint32_t clen = 0;
-        std::string ref(bcf_get_ref(v));
-        if (ref.size()>256) ref = ref.substr(0,256);
+    rl.push_back(ct);
+    int32_t N = cseq.size();
 
-        uint32_t no = 0;
-
-        while (!mt->pcm.empty())
-        {
-            CandidateMotif cm = mt->pcm.top();
-
-            if (first)
-            {
-                std::string ru = choose_repeat_unit(ref, cm.motif);
-                ahmm->set_model(ru.c_str());
-                ahmm->align(ref.c_str(), qual.c_str());
-
-                vntr.motif = cm.motif;
-                vntr.mlen = cm.motif.size();
-
-                vntr.motif_score = ahmm->get_motif_concordance();;
-                vntr.ru = ru;
-
-                cp = cm.score;
-                clen = cm.len;
-                first = false;
-                mscore = ahmm->get_motif_concordance();
-
-                if (debug)
-                {
-                    ahmm->print_alignment();
-
-                    printf("selected: %10s %.2f %.2f %.2f %.2f (%d/%d)\n",
-                            cm.motif.c_str(),
-                            cm.score,
-                            cm.fit,
-                            ahmm->get_motif_concordance(),
-                            (float)ahmm->get_exact_motif_count()/ahmm->get_motif_count(),
-                            ahmm->get_exact_motif_count(),
-                            ahmm->get_motif_count());
+    if (cseq.size() == 1) {
+        if (context.size() >= HOMOPOLYMER_MIN) {
+            candidate_unit tmp(cseq);
+            candidate_ru.insert(tmp);
+            added_ct++;
+        }
+    } else {
+        if (cseq.at(0) == cseq.at(cseq.size()-1)) {
+            cseq = cseq.substr(1);
+        }
+        if (cseq.size() > 2) {
+            periodic_seq pseq_obj(cseq.c_str(), max_mlen, debug);
+            if (flag) {
+                pseq_obj.get_candidate(min_ecover_indel, min_pcover_indel);
+            } else {
+                pseq_obj.get_candidate(min_ecover_extended, min_pcover_extended);
+            }
+            if (pseq_obj.candidate.size() > 0) {
+                for (const auto& s: pseq_obj.candidate) {
+                    // Convert back from collapsed sequence signature
+                    candidate_unit tmp(s,1);
+                    size_t pt = cseq.find(s);
+                    std::vector<int32_t> omin(s.size(), cseq.size());
+                    std::vector<int32_t> omax(s.size(), 0);
+                    if (pt == std::string::npos) {
+                        continue;
+                    }
+                    while (pt != std::string::npos) {
+                        for (size_t i = 0; i < s.size(); ++i) {
+                            omin[i] = std::min(omin[i], rl[pt+i]);
+                            omax[i] = std::max(omax[i], rl[pt+i]);
+                        }
+                        pt = cseq.find(s, pt+s.size());
+                    }
+                    std::string ss;
+                    for (size_t i = 0; i < s.size(); ++i) {
+                        if (omin[i] == omax[i]) {
+                            for (int32_t j = 0; j < omin[i]; ++j) {
+                                ss += s.at(i);
+                                tmp.variable_base.push_back(0);
+                            }
+                        } else {
+                            ss += s.at(i);
+                            tmp.variable_base.push_back(omin[i]);
+                        }
+                    }
+                    tmp.ru = ss;
+                    tmp.check();
+                    candidate_ru.insert(tmp);
+                    added_ct++;
                 }
             }
-            else
-            {
-                if (no<3 && (cp-cm.score<((float)1/cm.len)*cp || cm.score>0.4))
-                {
-                    //if score are not perfect, use AHMM
-                    std::string ru = choose_repeat_unit(ref, cm.motif);
-                    ahmm->set_model(ru.c_str());
-                    ahmm->align(ref.c_str(), qual.c_str());
-
-                    cp = cm.score;
-                    clen = cm.len;
-
-                    if (ahmm->get_motif_concordance()>mscore)
-                    {
-                        vntr.motif = cm.motif;
-                        vntr.motif_score = ahmm->get_motif_concordance();;
-                        vntr.ru = ru;
-                    }
-
-                    if (debug)
-                    {
-                        //ahmm->print_alignment();
-
-                        printf("selected: %10s %.2f %.2f %.2f %.2f (%d/%d)\n", mt->pcm.top().motif.c_str(),
-                                                                        mt->pcm.top().score,
-                                                                        mt->pcm.top().fit,
-                                                                        ahmm->get_motif_concordance(),
-                                                                        (float)ahmm->get_exact_motif_count()/ahmm->get_motif_count(),
-                                                                        ahmm->get_exact_motif_count(),
-                                                                        ahmm->get_motif_count());
-                    }
-                }
-                else
-                {
-                    if (debug)
-                    {
-                        printf("not selected: %10s %.2f \n", mt->pcm.top().motif.c_str(),
-                                                                        mt->pcm.top().score);
-                    }
-                }
-            }
-
-            if (!mt->pcm.empty()) mt->pcm.pop();
-
-            ++no;
         }
     }
-    else if (mode==ALLELE_FUZZY)
-    {
-        //choose candidate motif
-        bool first = true;
-        float cp = 0;
-        float mscore = 0;
-        uint32_t clen = 0;
-        std::string ref(bcf_get_ref(v));
-        if (ref.size()>256) ref = ref.substr(0,256);
-
-        uint32_t no = 0;
-
-        while (!mt->pcm.empty())
-        {
-            CandidateMotif cm = mt->pcm.top();
-
-            if (first)
-            {
-                std::string ru = choose_repeat_unit(ref, cm.motif);
-                ahmm->set_model(ru.c_str());
-                ahmm->align(ref.c_str(), qual.c_str());
-
-                vntr.motif = cm.motif;
-                vntr.motif_score = ahmm->get_motif_concordance();;
-                vntr.ru = ru;
-
-                cp = cm.score;
-                clen = cm.len;
-                first = false;
-                mscore = ahmm->get_motif_concordance();
-
-                if (debug)
-                {
-                    ahmm->print_alignment();
-
-                    printf("    selected: %10s %.2f %.2f %.2f %.2f (%d/%d)\n", cm.motif.c_str(),
-                                                                    cm.score,
-                                                                    cm.fit,
-                                                                    ahmm->get_motif_concordance(),
-                                                                    (float)ahmm->get_exact_motif_count()/ahmm->get_motif_count(),
-                                                                    ahmm->get_exact_motif_count(),
-                                                                    ahmm->get_motif_count());
-                }
-            }
-            else
-            {
-                if (no<3 && (cp-cm.score<((float)1/cm.len)*cp || cm.score>0.4))
-                {
-                    //if score are not perfect, use AHMM
-                    std::string ru = choose_repeat_unit(ref, cm.motif);
-                    ahmm->set_model(ru.c_str());
-                    ahmm->align(ref.c_str(), qual.c_str());
-
-                    cp = cm.score;
-                    clen = cm.len;
-
-                    if (ahmm->get_motif_concordance()>mscore)
-                    {
-                        vntr.motif = cm.motif;
-                        vntr.motif_score = ahmm->get_motif_concordance();;
-                        vntr.ru = ru;
-                    }
-
-                    if (debug)
-                    {
-                        ahmm->print_alignment();
-
-                        printf("    selected: %10s %.2f %.2f %.2f %.2f (%d/%d)\n", mt->pcm.top().motif.c_str(),
-                                                                        mt->pcm.top().score,
-                                                                        mt->pcm.top().fit,
-                                                                        ahmm->get_motif_concordance(),
-                                                                        (float)ahmm->get_exact_motif_count()/ahmm->get_motif_count(),
-                                                                        ahmm->get_exact_motif_count(),
-                                                                        ahmm->get_motif_count());
-                    }
-                }
-                else
-                {
-                    if (debug)
-                    {
-                        printf("not selected: %10s %.2f \n", mt->pcm.top().motif.c_str(),
-                                                                        mt->pcm.top().score);
-                    }
-                }
-            }
-
-            if (!mt->pcm.empty()) mt->pcm.pop();
-
-            ++no;
-        }
-    }
+    return added_ct;
 }
 
-/**
- * Chooses a phase of the motif that is appropriate for the alignment
- */
-std::string VNTRAnnotator::choose_repeat_unit(std::string& ref, std::string& motif)
-{
-    for (uint32_t i=0; i<motif.size(); ++i)
-    {
-        std::string smotif = mt->shift_str(motif, i);
-        if (ref.compare(0, smotif.size(), smotif)==0)
-        {
-            return smotif;
+int32_t VNTRAnnotator::if_homopoly(const char* chrom, int32_t left, int32_t right, char&b) {
+    int32_t seq_len;
+    std::string hseq = faidx_fetch_seq(fai, chrom, std::max(0, left-2*HOMOPOLYMER_MIN), left, &seq_len);
+    uint32_t st_rel = hseq.size();
+    hseq += faidx_fetch_seq(fai, chrom, right, right+2*HOMOPOLYMER_MIN, &seq_len);
+    b = hseq.at(st_rel);
+    int32_t ct = 0;
+    for (uint32_t i = st_rel; i < hseq.size(); ++i) {
+        if (hseq.at(i) == b) {
+            ct++;
+        } else {
+            break;
         }
     }
-
-    return motif;
+    for (uint32_t i = st_rel-1; i > 0; --i) {
+        if (hseq.at(i) == b) {
+            ct++;
+        } else {
+            break;
+        }
+    }
+    return ct;
 }
 
 /**
@@ -513,13 +359,6 @@ bool VNTRAnnotator::is_vntr(Variant& variant, int32_t mode, std::string& method)
 
     if (mode==TAN_KANG_2015_VNTR)
     {
-//        if (rlen - mlen < 6)
-//        {
-//            variant.vntr.print();
-//        }
-//        std::cerr << "rlen " << rlen << "\n";
-//        std::cerr << "mlen " << mlen << "\n";
-//        std::cerr << "no_exact_ru " << variant.vntr.no_exact_ru << "\n";
         if ((rlen - mlen) >= 6 && no_exact_ru>=2)
         {
             if (mlen==1 && motif_concordance>0.9)

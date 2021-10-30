@@ -30,7 +30,49 @@
 #include <cmath>
 #include <cfloat>
 #include <vector>
+#include <set>
 #include <iostream>
+
+struct candidate_unit {
+    std::string ru;
+    bool inexact;
+    std::vector<int32_t> variable_base;
+    candidate_unit(std::string _s, bool _i = 0) : ru(_s), inexact(_i) {}
+    void check() {
+        if (inexact && variable_base.size() != ru.size()) {
+            inexact = 0;
+            variable_base.clear();
+            return;
+        }
+        if (inexact) {
+            int32_t ct = 0;
+            for (size_t i = 0; i < ru.size(); ++i) {
+                ct += variable_base[i];
+            }
+            if (ct == 0) {
+                inexact = 0;
+                variable_base.clear();
+            }
+        }
+    }
+    bool operator<(const candidate_unit & rhs) const {
+        if (inexact != rhs.inexact) {
+            return (inexact < rhs.inexact);
+        }
+        if (ru.size() != rhs.ru.size()) {
+            return (ru.size() < rhs.ru.size());
+        }        
+        if (ru.compare(rhs.ru) == 0) {return false;}
+        if (ru.size() > 1) {
+            for (size_t i = 1; i < ru.size(); ++i) {
+                if (rhs.ru.compare(ru.substr(i)+ru.substr(0,i)) == 0) {
+                    return false;
+                }
+            }
+        }
+        return (ru.compare(rhs.ru) < 0);
+    }
+};
 
 /**
  * Class for representing a VNTR.
@@ -45,6 +87,7 @@ class VNTR
     int32_t rid;  //rid, redundant data with Variant. todo: something about this.
 
     //motif
+    std::vector<candidate_unit> candidate_ru;
     std::string motif;         //motif
     std::string ru;            //repeat unit on the reference
     uint32_t mlen;             //length of motif

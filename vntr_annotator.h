@@ -29,6 +29,7 @@
 #include <cstring>
 #include <cmath>
 #include <cfloat>
+#include <complex>
 #include <vector>
 #include <map>
 #include <queue>
@@ -46,6 +47,7 @@
 #include "vntr.h"
 #include "candidate_region_extractor.h"
 #include "flank_detector.h"
+#include "seq_ipdft.h"
 
 //definition of STRs
 #define LAI_2003_STR       1
@@ -72,6 +74,8 @@
 #define CLIP_1L2R 1
 #define FRAHMM    2
 
+#define HOMOPOLYMER_MIN 6
+
 /**
  * Class for determining basic traits of an indel
  * motifs, flanks and VNTR type statistics.
@@ -82,6 +86,9 @@ class VNTRAnnotator
     public:
 
     uint32_t max_mlen; //maximum length for motif search in the fast tree.
+    std::vector<char> alphabet{'A','C','G','T'};
+    double min_ecover_indel, min_pcover_indel;
+    double min_ecover_extended, min_pcover_extended;
 
     //model
 
@@ -119,6 +126,11 @@ class VNTRAnnotator
      */
     ~VNTRAnnotator();
 
+    void set_ru_detection_threshold(double _e1, double _p1, double _e2, double _p2) {
+        min_ecover_indel = _e1; min_pcover_indel = _p1;
+        min_ecover_extended = _e2; min_pcover_extended = _p2;
+    }
+
     /**
      * Annotates VNTR characteristics.
      * @mode
@@ -129,22 +141,10 @@ class VNTRAnnotator
      *   x - integrated models
      */
     void annotate(bcf_hdr_t* h, bcf1_t* v, Variant& variant, std::string mode);
-
-    /**
-     * Pick candidate motifs.
-     * candidate_motifs contain motifs and a measure of confidence
-     */
-    void pick_candidate_motifs(bcf_hdr_t* h, bcf1_t* v, Variant& variant);
-
-    /**
-     * Chooses a phase of the motif that is appropriate for the alignment
-     */
-    void choose_best_motif(bcf_hdr_t* h, bcf1_t* v, MotifTree* mt, VNTR& vntr, uint32_t mode);
-
-    /**
-     * Chooses a phase of the motif that is appropriate for the alignment
-     */
-    std::string choose_repeat_unit(std::string& ref, std::string& motif);
+    void find_repeat_unit(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru);
+    int32_t rl_find_repeat_unit(std::string& context, std::set<candidate_unit>& candidate_ru, bool flag=0);
+    int32_t og_find_repeat_unit(std::string& context, std::set<candidate_unit>& candidate_ru, bool flag=0);
+    int32_t if_homopoly(const char* chrom, int32_t left, int32_t right, char&b);
 
     /**
      * Returns true if is to be classified as a VNTR

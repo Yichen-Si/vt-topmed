@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (c) 2014 Adrian Tan <atks@umich.edu>
+   Copyright (c) 2015 Adrian Tan <atks@umich.edu>
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -21,19 +21,12 @@
    THE SOFTWARE.
 */
 
-#ifndef ANNOTATE_INDELS_H
-#define ANNOTATE_INDELS_H
+#ifndef CONSOLIDATE_VNTRS_H
+#define CONSOLIDATE_VNTRS_H
 
-#include "htslib/kstring.h"
-#include "bcf_ordered_reader.h"
-#include "bcf_ordered_writer.h"
-#include "rfhmm.h"
-#include "lfhmm.h"
-#include "variant_manip.h"
 #include "program.h"
-#include "vntr_annotator.h"
-#include "filter.h"
+#include "vntr_consolidator.h"
 
-void annotate_indels(int argc, char ** argv);
+void consolidate_vntrs(int argc, char **argv);
 
 #endif
