@@ -9,7 +9,6 @@ SOURCES = align\
 		allele\
 		annotate_1000g\
 		annotate_dbsnp_rsid\
-		annotate_indels\
 		annotate_regions\
 		annotate_variants\
 		augmented_bam_record\
@@ -116,6 +115,9 @@ SOURCES = align\
 		ahmm\
 		xcmp\
 		Error\
+		wphmm\
+		vntr_candidate\
+		identify_vntr\
 
 SOURCESONLY = main.cpp
 

@@ -1,28 +1,5 @@
-/* The MIT License
-
-   Copyright (c) 2015 Adrian Tan <atks@umich.edu>
-
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in
-   all copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-   THE SOFTWARE.
-*/
-
-#ifndef VNTR_H
-#define VNTR_H
+#ifndef VNTR_CANDIDATE_H
+#define VNTR_CANDIDATE_H
 
 #include <cstdlib>
 #include <cstdint>
@@ -32,15 +9,74 @@
 #include <vector>
 #include <set>
 #include <iostream>
+#include <utility>
 
-#include "vntr_candidate.h"
+#include "wphmm.h"
+
+struct candidate_fuzzy_motif {
+    Motif_fuzzy_binary* motif;
+    int32_t st, ed; // zero based, inclusive. genome position of repeat region
+    int32_t n_ru;   // number of ru matched
+    double viterbi_score;
+    candidate_fuzzy_motif(Motif_fuzzy_binary* _m, int32_t _s, int32_t _e, int32_t _n, double _v) :
+        motif(_m), st(_s), ed(_e), n_ru(_n), viterbi_score(_v) {}
+    bool operator<(const candidate_fuzzy_motif & rhs) const {
+        return (viterbi_score > rhs.viterbi_score);
+    }
+};
+
+struct candidate_unit {
+    std::string ru;
+    bool inexact;
+    std::vector< std::pair<int32_t, int32_t> > variable_base;
+    candidate_unit(std::string _s, bool _i = 0) : ru(_s), inexact(_i) {}
+    void check() {
+        if (inexact && variable_base.size() != ru.size()) {
+            inexact = 0;
+            variable_base.clear();
+            return;
+        }
+        if (inexact) {
+            int32_t ct = 0;
+            for (size_t i = 0; i < ru.size(); ++i) {
+                if (variable_base[i].first > variable_base[i].second) {
+                    int32_t tmp = variable_base[i].first;
+                    variable_base[i].first  = variable_base[i].second;
+                    variable_base[i].second = tmp;
+                }
+                ct += (variable_base[i].first < variable_base[i].second);
+            }
+            if (ct == 0) {
+                inexact = 0;
+                variable_base.clear();
+            }
+        }
+    }
+    bool operator<(const candidate_unit & rhs) const {
+        if (inexact != rhs.inexact) {
+            return (inexact < rhs.inexact);
+        }
+        if (ru.size() != rhs.ru.size()) {
+            return (ru.size() < rhs.ru.size());
+        }
+        if (ru.compare(rhs.ru) == 0) {return false;}
+        if (ru.size() > 1) {
+            for (size_t i = 1; i < ru.size(); ++i) {
+                if (rhs.ru.compare(ru.substr(i)+ru.substr(0,i)) == 0) {
+                    return false;
+                }
+            }
+        }
+        return (ru.compare(rhs.ru) < 0);
+    }
+};
 
 /**
  * Class for representing a VNTR.
  *
  * 2 sets of attributes for the exact and fuzzy detections of the repeat region.
  */
-class VNTR
+class VNTR_CANDIDATE
 {
     public:
 
@@ -49,6 +85,8 @@ class VNTR
 
     //motif
     std::vector<candidate_unit> candidate_ru;
+
+
     std::string motif;         //motif
     std::string ru;            //repeat unit on the reference
     uint32_t mlen;             //length of motif
@@ -84,7 +122,7 @@ class VNTR
     /**
      * Constructor.
      */
-    VNTR();
+    VNTR_CANDIDATE();
 
     /**
      * Clear object.
@@ -94,7 +132,7 @@ class VNTR
     /**
      * Checks for equality.
      */
-    bool equals(VNTR& vntr);
+    bool equals(VNTR_CANDIDATE& vntr);
 
     /**
      * Get VNTR representation in string format.

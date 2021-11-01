@@ -24,7 +24,7 @@
 #include "align.h"
 #include "annotate_1000g.h"
 #include "annotate_dbsnp_rsid.h"
-#include "annotate_indels.h"
+// #include "annotate_indels.h"
 #include "annotate_regions.h"
 #include "annotate_variants.h"
 #include "cat.h"
@@ -80,6 +80,7 @@
 #include "vntrize.h"
 #include "joint_genotype_sequential.h"
 #include "joint_genotype_block.h"
+#include "identify_vntr.h"
 
 void print_time(double t)
 {
@@ -168,7 +169,7 @@ int main(int argc, char ** argv)
     else if (argc>1 && cmd=="paste_genotypes")
     {
         print = paste_genotypes(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="cat")
     {
         print = cat(argc-1, ++argv);
@@ -184,7 +185,7 @@ int main(int argc, char ** argv)
     else if (argc>1 && cmd=="decompose2")
     {
         decompose2(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="decompose_blocksub")
     {
         decompose_blocksub(argc-1, ++argv);
@@ -196,7 +197,7 @@ int main(int argc, char ** argv)
     else if (argc>1 && cmd=="vntrize")
     {
         print = vntrize(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="validate")
     {
         print = validate(argc-1, ++argv);
@@ -268,7 +269,7 @@ int main(int argc, char ** argv)
     else if (argc>1 && cmd=="merge_candidate_variants_sequential")
     {
         merge_candidate_variants_sequential(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="union_variants")
     {
         union_variants(argc-1, ++argv);
@@ -320,15 +321,15 @@ int main(int argc, char ** argv)
     else if (argc>1 && cmd=="joint_genotype_sequential")
     {
         joint_genotype_sequential(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="joint_genotype_block")
     {
         joint_genotype_block(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="milk_filter")
     {
         milk_filter(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="align")
     {
         align(argc-1, ++argv);
@@ -340,7 +341,7 @@ int main(int argc, char ** argv)
     else if (argc>1 && cmd=="compute_concordance")
     {
         compute_concordance(argc-1, ++argv);
-    }    
+    }
     else if (argc>1 && cmd=="estimate")
     {
         estimate(argc-1, ++argv);
@@ -357,10 +358,10 @@ int main(int argc, char ** argv)
     {
         profile_len(argc-1, ++argv);
     }
-    else if (argc>1 && cmd=="annotate_indels")
-    {
-        annotate_indels(argc-1, ++argv);
-    }
+    // else if (argc>1 && cmd=="annotate_indels")
+    // {
+    //     annotate_indels(argc-1, ++argv);
+    // }
     else if (argc>1 && cmd=="annotate_1000g")
     {
         annotate_1000g(argc-1, ++argv);
@@ -380,7 +381,13 @@ int main(int argc, char ** argv)
     else if (argc>1 && cmd=="test")
     {
         test(argc-1, ++argv);
-    }    
+    }
+
+    else if (argc>1 && cmd=="identify_vntr")
+    {
+        identify_vntr(argc-1, ++argv);
+    }
+
     else
     {
         std::clog << "Command not found: " << argv[1] << "\n\n";

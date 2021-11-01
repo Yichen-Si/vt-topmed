@@ -1,114 +1,37 @@
-/* The MIT License
-
-   Copyright (c) 2014 Adrian Tan <atks@umich.edu>
-
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in
-   all copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-   THE SOFTWARE.
-*/
-
 #include "vntr_annotator.h"
 
-/**
- * Constructor.
- */
-VNTRAnnotator::VNTRAnnotator(std::string& ref_fasta_file, bool debug)
-{
+VNTRAnnotator::VNTRAnnotator(std::string& ref_fasta_file, bool _debug, uint32_t _m) : debug(_debug), max_mlen(_m) {
     vm = new VariantManip(ref_fasta_file.c_str());
-
-    float delta = 0.0001;
-    float epsilon = 0.05;
-    float tau = 0.01;
-    float eta = 0.01;
-    float mismatch_penalty = 3;
-
-    ahmm = new AHMM(false);
-    ahmm->set_delta(delta);
-    ahmm->set_epsilon(epsilon);
-    ahmm->set_tau(tau);
-    ahmm->set_eta(eta);
-    ahmm->set_mismatch_penalty(mismatch_penalty);
-    ahmm->initialize_T();
-
     fai = fai_load(ref_fasta_file.c_str());
-    if (fai==NULL)
-    {
+    if (fai==NULL) {
         fprintf(stderr, "[%s:%d %s] Cannot load genome index: %s\n", __FILE__, __LINE__, __FUNCTION__, ref_fasta_file.c_str());
         exit(1);
     }
-
-    cre = new CandidateRegionExtractor(ref_fasta_file, debug);
-    fd = new FlankDetector(ref_fasta_file, debug);
-
-    max_mlen = 10;
-    mt = new MotifTree(max_mlen, debug);
-
-    this->debug = debug;
-    qual.assign(2048, 'K');
-
     min_ecover_indel = 0.5; min_pcover_indel = 0.5;
     min_ecover_extended = 0.3; min_pcover_extended = 0.3;
+    extend_bp = 150;
 };
 
-/**
- * Destructor.
- */
-VNTRAnnotator::~VNTRAnnotator()
-{
-
-if (debug) {
-    std::cerr << "VNTRAnnotator Destructor\n";
-}
+VNTRAnnotator::~VNTRAnnotator() {
     delete vm;
     fai_destroy(fai);
-    if (factors)
-    {
-        for (size_t i=1; i<=max_len; ++i)
-        {
-            if (factors[i])
-                free(factors[i]);
-        }
-        free(factors);
-    }
+    if (wphmm) {delete wphmm;}
 }
 
 /**
  * Annotates VNTR characteristics.
- * @mode -
  */
-void VNTRAnnotator::annotate(bcf_hdr_t* h, bcf1_t* v, Variant& variant, std::string mode)
+void VNTRAnnotator::annotate(bcf_hdr_t* h, bcf1_t* v, std::string mode)
 {
-    if (!(variant.type&VT_INDEL)) {
-        return;
-    }
-
+    if (bcf_get_variant_types(v) != VCF_INDEL) {return;}
     std::set<candidate_unit> candidate_ru;
-    // VNTR& vntr = variant.vntr;
-    variant.rid = bcf_get_rid(v);
-    variant.pos1 = bcf_get_pos1(v);
-
-    //1. detect candidate repeat units
-    //2. for each candidate, detect repeat region and evaluate
-    //3. choose the best repeat unit and track
-
     // if (debug) std::cerr << "============================================\n";
     // if (debug) std::cerr << "ANNOTATING INDEL\n";
     //1. detect candidate repeat units
     find_repeat_unit(h, v, candidate_ru);
+    //2. for each candidate, detect repeat region (boundary) and evaluate (HMM)
+    find_repeat_region(h, v, candidate_ru);
+    //3. choose the best repeat unit and track
 
     // if (debug) std::cerr << "============================================\n";
     return;
@@ -125,14 +48,10 @@ void VNTRAnnotator::find_repeat_unit(bcf_hdr_t* h, bcf1_t* v, std::set<candidate
     int32_t indel_end = pos1 + focal_seq.size() - 1; // 1-based, inclusive
     if (strlen(alleles[1]) > focal_seq.size()) {
         focal_seq = alleles[1];
-        // indel_end = pos1;
     }
     focal_seq = focal_seq.substr(1); // only keep the inserted or deleted seq
-if (debug) {
-    std::cerr << "============================================\n";
-    std::cerr << "Read indel: " << pos1 << '\t' << alleles[0] << '\t' << alleles[1] << '\t' << focal_seq << std::endl;
-}
     // check if it is an indel inside homopolymer
+    // TODO: include homopolymer as an instance of vntr?
     char b;
     int32_t homopoly = if_homopoly(chrom, pos1-1, indel_end, b);
     if (homopoly > HOMOPOLYMER_MIN) {
@@ -163,27 +82,30 @@ if (debug) {
     if (focal_seq.size() < slen) {
         int32_t pad = (int32_t) ((slen - focal_seq.size() + 1) / 2);
         int32_t seq_len;
-        std::string extended_seq = faidx_fetch_seq(fai, chrom, std::max(0, pos1 - pad), pos1 - 1, &seq_len);
+        int32_t extended_st0 = std::max(0, pos1 - pad);
+        int32_t extended_ed0 = indel_end + pad - 1;
+        std::string extended_seq = faidx_fetch_seq(fai, chrom, extended_st0, pos1 - 1, &seq_len);
         st_rel = extended_seq.size();
         extended_seq += focal_seq;
         ed_rel = extended_seq.size() - 1;
-        extended_seq += faidx_fetch_seq(fai, chrom, indel_end, indel_end + pad - 1, &seq_len);
+        extended_seq += faidx_fetch_seq(fai, chrom, indel_end, extended_ed0, &seq_len);
 if (debug) {
-    std::cerr << "Extended sequence: " << slen << '\t' << focal_seq << '\t' << extended_seq << '\t' << st_rel  << ',' << ed_rel << std::endl;
+    std::cerr << "============================================\n";
+    std::cerr << "Read indel: " << pos1 << '\t' << alleles[0] << '\t' << alleles[1] << std::endl;
+    std::cerr << "Extended sequence: " << slen << '\t' << focal_seq << '\t' << extended_seq << std::endl;
 }
         int32_t ct_extnd = 0;
         ct_extnd += rl_find_repeat_unit(extended_seq, candidate_ru, 0);
         ct_extnd += og_find_repeat_unit(extended_seq, candidate_ru, 0);
         if (ct_indel == 0 && focal_seq.size() > 4) {
             if (extended_seq.substr(ed_rel+1,focal_seq.size()).compare(focal_seq) == 0 ||
-                extended_seq.find(focal_seq) <= st_rel-focal_seq.size()) {
-                    candidate_ru.insert(candidate_unit(focal_seq));
-                }
+                extended_seq.find(focal_seq) < st_rel) {
+                candidate_ru.insert(candidate_unit(focal_seq));
+            }
         }
     }
 
-
-if (debug) {
+if (debug && candidate_ru.size() > 0) {
     std::cerr << "Identified " << candidate_ru.size() << " candidates\n";
     for (const auto& s : candidate_ru) {
         std::cerr << s.ru << ' ' << s.inexact << '\t';
@@ -192,6 +114,85 @@ if (debug) {
 }
     return;
 }
+
+
+void VNTRAnnotator::find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru) {
+    if (candidate_ru.size() < 1) {return;}
+    int32_t pos1 = v->pos + 1;
+    const char* chrom = bcf_get_chrom(h, v);
+    int32_t start0 = 0, end0 = 0; // genome pos of the whole query
+    int32_t spiked_st = 0, spiked_ed = 0; // relative pos of the longest allele
+    int32_t seq_len;
+    char** alleles = bcf_get_allele(v);
+    std::string focal_seq(alleles[0]);
+    int32_t indel_end = pos1 + focal_seq.size() - 2; // 0-based, inclusive
+
+    // Take a large enough region
+    start0 = (pos1 - extend_bp - 1 < 0) ? 0 : pos1 - extend_bp - 1;
+    end0   = indel_end + extend_bp;
+    if (strlen(alleles[1]) > strlen(alleles[0])) {
+        focal_seq = alleles[1];
+    }
+    focal_seq = focal_seq.substr(1);
+    spiked_ed = spiked_st + focal_seq.size() - 1; // rel. pos of the last base of the longest allele
+    std::string query = faidx_fetch_seq(fai, chrom, start0, pos1-1, &seq_len);
+    if (seq_len != extend_bp + 1) {
+        start0 = pos1-seq_len;
+    }
+    spiked_st = query.size(); // rel. pos of the first base of inserted or deleted sequence
+    query += focal_seq;
+    spiked_ed = query.size() - 1;
+    query += faidx_fetch_seq(fai, chrom, indel_end+1, end0, &seq_len);
+
+if (debug) {
+    std::cerr << "VNTRAnnotator::find_repeat_region - Query sequence:\n" << query << '\n';
+}
+
+    // Process each candidate RU separately
+    for (const auto& s : candidate_ru) {
+        // Convert candidate repeat unit to pHMM motif, initialize hmm object
+        std::string unit = s.ru;
+        int32_t m = s.ru.size();
+if (debug) {
+    std::cerr << "VNTRAnnotator::find_repeat_region - Motif of HMM: " << unit;
+}
+        if (!s.inexact) {
+            wphmm = new WPHMM(query.c_str(), unit.c_str(), debug);
+        } else {
+            unit = "";
+            std::vector<bool> tmp;
+            for (size_t i = 0; i < s.ru.size(); ++i) {
+                int32_t r = s.variable_base[i].first;
+                for (int32_t j = 0; j < r; ++j) {
+                    unit += s.ru.at(i);
+                    tmp.push_back(0);
+                }
+                if (r < s.variable_base[i].second) {
+                    unit += s.ru.at(i);
+                    tmp.push_back(1);
+                }
+            }
+            m = unit.length();
+            bool base_relax[m];
+            std::copy(tmp.begin(), tmp.end(), base_relax);
+            wphmm = new WPHMM(query.c_str(), unit.c_str(), debug, base_relax);
+if (debug) {
+    std::cerr << ", expanded as " << unit << '\t';
+    for (const auto & v : tmp) {std::cerr << v;}
+}
+        }
+        // Run HMM
+        wphmm->initialize();
+        std::string v_path = wphmm->get_viterbi_path();
+if (debug) {
+    std::cerr << "\n" << v_path << std::endl;
+    std::cerr << "log2 OR:\t" << wphmm->viterbi_score << '\n';
+}
+    }
+
+
+}
+
 
 /**
  * Find periodic subsequence
@@ -210,8 +211,7 @@ int32_t VNTRAnnotator::og_find_repeat_unit(std::string& context, std::set<candid
                 if (context.find(s) == std::string::npos) {
                     continue;
                 }
-                candidate_unit tmp(s,0);
-                candidate_ru.insert(tmp);
+                candidate_ru.insert(candidate_unit(s,0));
                 added_ct++;
             }
         }
@@ -250,16 +250,14 @@ int32_t VNTRAnnotator::rl_find_repeat_unit(std::string& context, std::set<candid
     }
     rl.push_back(ct);
     int32_t N = cseq.size();
-
     if (cseq.size() == 1) {
         if (context.size() >= HOMOPOLYMER_MIN) {
-            candidate_unit tmp(cseq);
-            candidate_ru.insert(tmp);
+            candidate_ru.insert(candidate_unit(cseq));
             added_ct++;
         }
     } else {
         if (cseq.at(0) == cseq.at(cseq.size()-1)) {
-            cseq = cseq.substr(1);
+            cseq = cseq.substr(0, cseq.size()-1);
         }
         if (cseq.size() > 2) {
             periodic_seq pseq_obj(cseq.c_str(), max_mlen, debug);
@@ -290,11 +288,11 @@ int32_t VNTRAnnotator::rl_find_repeat_unit(std::string& context, std::set<candid
                         if (omin[i] == omax[i]) {
                             for (int32_t j = 0; j < omin[i]; ++j) {
                                 ss += s.at(i);
-                                tmp.variable_base.push_back(0);
+                                tmp.variable_base.push_back(std::make_pair(1,1));
                             }
                         } else {
                             ss += s.at(i);
-                            tmp.variable_base.push_back(omin[i]);
+                            tmp.variable_base.push_back(std::make_pair(omin[i], omax[i]));
                         }
                     }
                     tmp.ru = ss;
