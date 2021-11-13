@@ -8,18 +8,37 @@
 #include <cfloat>
 #include <vector>
 #include <set>
+#include <list>
 #include <iostream>
 #include <utility>
 
+#include "htslib/vcf.h"
+#include "htslib/faidx.h"
 #include "wphmm.h"
+#include "wphmm_ungapped.h"
+
+// inline bool comparePtrToCandyMotify(candidate_fuzzy_motif* a, candidate_fuzzy_motif* b) {
+//     return (a->viterbi_score > b->viterbi_score);
+// }
 
 struct candidate_fuzzy_motif {
-    Motif_fuzzy_binary* motif;
+    uint32_t mlen;
+    std::string ru;
+    std::vector<bool> label;
+    bool inexact;
     int32_t st, ed; // zero based, inclusive. genome position of repeat region
-    int32_t n_ru;   // number of ru matched
+    int32_t n_ru;   // number of (noninterrupted) ru matched
     double viterbi_score;
-    candidate_fuzzy_motif(Motif_fuzzy_binary* _m, int32_t _s, int32_t _e, int32_t _n, double _v) :
-        motif(_m), st(_s), ed(_e), n_ru(_n), viterbi_score(_v) {}
+    int32_t l;
+    candidate_fuzzy_motif(std::string _u, std::vector<bool> _w, int32_t _s, int32_t _e, int32_t _n, double _v) : ru(_u), label(_w), st(_s), ed(_e), n_ru(_n), viterbi_score(_v) {
+            mlen = ru.length();
+            inexact = 0;
+            for (uint32_t i = 0; i < mlen; ++i) {
+                inexact = inexact || label[i];
+            }
+            l = ed-st+1;
+        }
+    candidate_fuzzy_motif() {}
     bool operator<(const candidate_fuzzy_motif & rhs) const {
         return (viterbi_score > rhs.viterbi_score);
     }
@@ -76,73 +95,68 @@ struct candidate_unit {
  *
  * 2 sets of attributes for the exact and fuzzy detections of the repeat region.
  */
-class VNTR_CANDIDATE
+class VNTR_candidate
 {
     public:
 
-    //chromosome
-    int32_t rid;  //rid, redundant data with Variant. todo: something about this.
+    bool debug;
+    int32_t rid;
+    candidate_fuzzy_motif motif;   // store st/ed/len w.r.t. reference
+    uint32_t mlen, rlen_r, n_ru_r; // duplicated info
+    uint32_t rlen_l, n_ru_l;       // info w.r.t. longest mosaic sequence
+    double score_r;
+    const char* chrom;
+    // std::vector<std::pair<std::string, std::vector<bool> > > alternative_ru;
+    std::string repeat_ref;     // repeat region in ref
+    std::string lflank;         // left flank
+    std::string rflank;         // right flank
+    std::list<std::pair<int32_t, std::string> > insertions; // maintain sorted
+    // std::set<int32_t> inserted_pos;
+    std::string merged_longest_rr; // could make this easier by keeping only the longest allele
+    bool updated = 0;
 
-    //motif
-    std::vector<candidate_unit> candidate_ru;
+    VNTR_candidate(bcf_hdr_t* h, int32_t _r, candidate_fuzzy_motif& _m, bool _b) : debug(_b), rid(_r), motif(_m) {
+        mlen   = motif.mlen;
+        rlen_l = motif.l;
+        rlen_r = motif.ed - motif.st + 1;
+        n_ru_r = motif.n_ru;
+        n_ru_l = motif.n_ru;
+        chrom = h->id[BCF_DT_CTG][rid].key;
+    }
+    VNTR_candidate() {}
 
-
-    std::string motif;         //motif
-    std::string ru;            //repeat unit on the reference
-    uint32_t mlen;             //length of motif
-    float motif_score;         //motif score from motif tree
-
-    //exact repeat tract
-    std::string repeat_tract;   //repeat tract
-    int32_t rbeg1;              //beginning of repeat tract
-    int32_t rend1;              //end of repeat tract
-    float rl;                   //number of repeat units on repeat tract
-    float ll;                   //number of repeat units on longest allele
-    float motif_concordance;    //motif concordance from hmm
-    int32_t no_exact_ru;        //number exact repeat units from hmm
-    int32_t total_no_ru;        //total no of repeat units from hmm
-    std::string lflank;         //left flank
-    std::string rflank;         //right flank
-
-    //fuzzy repeat tract
-    std::string fuzzy_repeat_tract;   //repeat tract
-    int32_t fuzzy_rbeg1;              //beginning of repeat tract
-    int32_t fuzzy_rend1;              //end of repeat tract
-    float fuzzy_rl;                   //number of repeat units on repeat tract
-    float fuzzy_ll;                   //number of repeat units on longest allele
-    float fuzzy_motif_concordance;    //motif concordance from hmm
-    int32_t fuzzy_no_exact_ru;        //number exact repeat units from hmm
-    int32_t fuzzy_total_no_ru;        //total no of repeat units from hmm
-    std::string fuzzy_lflank;         //left flank
-    std::string fuzzy_rflank;         //right flank
-
-    //large repeat tract
-    bool is_large_repeat_tract;
+    void add_insertion(int32_t _p, std::string _s);
+    void combined_insertions(faidx_t* fai);
+    int32_t get_pos_in_ref(int32_t p_rel);
 
     /**
-     * Constructor.
+     * Merge two VNTR record if possible. (1 if merge successfully)
      */
-    VNTR_CANDIDATE();
+    int32_t merge(VNTR_candidate& rt, int32_t min_overlap = 1);
 
     /**
-     * Clear object.
+     * 0: overlap, -1: <rt, 1: >rt.
      */
-    void clear();
+    int32_t intersect(VNTR_candidate& rt, int32_t min_overlap = 1);
 
     /**
-     * Checks for equality.
+     * If two repeat models are compatible.
+       0 - Equivalent; 3 - Incompatible;
+       1 - Left is better; 2 - Right is better.
      */
-    bool equals(VNTR_CANDIDATE& vntr);
+    int32_t ru_compair(candidate_fuzzy_motif& rhs);
+
+    bool operator<(const VNTR_candidate& rhs) const {
+        if (motif.st == rhs.motif.st) {
+            return (motif.ed <= rhs.motif.ed);
+        }
+        return (motif.st < rhs.motif.st);
+    }
 
     /**
-     * Get VNTR representation in string format.
+     * Fit an ungapped local alignment if updates have been made
      */
-    void get_vntr_allele_string(std::string& var);
-
-    /**
-     * Get VNTR fuzzy representation in string format.
-     */
-    void get_fuzzy_vntr_allele_string(std::string& var);
+    bool model_refit(faidx_t* fai, int32_t flk=10);
 
     /**
      * Print object.

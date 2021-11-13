@@ -9,6 +9,8 @@
 #include "filter.h"
 #include "vntr_annotator.h"
 
+#define BUFFER_BP 2000
+
 void identify_vntr(int argc, char ** argv);
 
 #endif

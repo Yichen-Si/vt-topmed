@@ -143,6 +143,9 @@ public:
             }
             kept_base.insert(bases[m].b);
         }
+        if (kept_base.size() <= 1) {
+            return;
+        }
         // remove bases that are less periodic - de-noising
         // TODO: may not be the right approach since periodic base identification is not perfect
         std::string subseq = "";
@@ -161,6 +164,13 @@ public:
             if (ptr != kmer.end()) {
                 ptr->second.first++;
             } else {
+                bool homo = 1;
+                uint32_t j = 0;
+                while (j < lcm) {
+                    homo = homo && (subseq.at(i+j) == subseq.at(i));
+                    j++;
+                }
+                if (homo) {continue;}
                 kmer[subseq.substr(i,lcm)] = std::make_pair(1,i);
             }
         }

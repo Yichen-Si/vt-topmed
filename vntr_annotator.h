@@ -20,10 +20,12 @@
 
 #include "variant_manip.h"
 #include "vntr_candidate.h"
-#include "wphmm.h"
 #include "seq_ipdft.h"
+#include "wphmm.h"
+#include "wphmm_ungapped.h"
 
 //definition of STRs
+#define VITERBI_VNTR       0
 #define LAI_2003_STR       1
 #define KELKAR_2008_STR    2
 #define FONDON_2012_STR    3
@@ -52,8 +54,6 @@ class VNTRAnnotator
     // tools
     faidx_t* fai;
     VariantManip *vm;
-    // TODO need a separate hmm operator for collapsed motif
-    WPHMM* wphmm;
 
     VNTRAnnotator(std::string& ref_fasta_file, bool _debug=false, uint32_t _m = 16);
     ~VNTRAnnotator();
@@ -63,7 +63,16 @@ class VNTRAnnotator
         min_ecover_extended = _e2; min_pcover_extended = _p2;
     }
 
-    void annotate(bcf_hdr_t* h, bcf1_t* v, std::string mode);
+    /**
+     * Identify and evaluate repeat model for input indel
+     */
+    int32_t annotate(bcf_hdr_t* h, bcf1_t* v, std::vector<candidate_fuzzy_motif>& candidate_model, int32_t mode=VITERBI_VNTR);
+
+    /**
+     * Keep at most one candidate repeat unit for each category (exact/inexact)
+     */
+    void pick_top_candidates(std::vector<candidate_fuzzy_motif>& candidate_model, int32_t mode);
+
     /**
      * Try to find VNTR signatures.
      */
@@ -71,15 +80,17 @@ class VNTRAnnotator
     int32_t rl_find_repeat_unit(std::string& context, std::set<candidate_unit>& candidate_ru, bool flag=0);
     int32_t og_find_repeat_unit(std::string& context, std::set<candidate_unit>& candidate_ru, bool flag=0);
     int32_t if_homopoly(const char* chrom, int32_t left, int32_t right, char&b);
+
     /**
      * Try to find the boundary of repeat region given a set of candidate RU
      */
-     void find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru);
+     void find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru, std::vector<candidate_fuzzy_motif>& candidate_model);
 
     /**
      * Returns true if is to be classified as a VNTR
      */
     bool is_vntr(Variant& variant, int32_t mode, std::string& method);
+    bool is_vntr(candidate_fuzzy_motif& motif, int32_t mode);
 };
 
 #endif

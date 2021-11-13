@@ -159,6 +159,3 @@ bool append_cwd(std::string& path)
 
     return false;
 };
-
-
-

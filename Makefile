@@ -116,6 +116,7 @@ SOURCES = align\
 		xcmp\
 		Error\
 		wphmm\
+		wphmm_ungapped\
 		vntr_candidate\
 		identify_vntr\
 

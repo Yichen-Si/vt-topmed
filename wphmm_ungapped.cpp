@@ -1,37 +1,24 @@
-#include "wphmm.h"
+#include "wphmm_ungapped.h"
 
-WPHMM::WPHMM(const char* _s, const char* _m, bool _debug, bool* _b) {
+WPHMM_UNGAP::WPHMM_UNGAP(const char* _s, const char* _m, bool _debug, bool* _b) {
     debug = _debug;
     motif = new Motif_fuzzy_binary(_m);
+    if (_b != nullptr) {
+        motif->set_indicator(_b);
+    }
     motif->set_emission(.05); // Mismatch probability
     mlen = motif->mlen;
-    int32_t n_inexact = 0;
-    if (_b != nullptr) {
-        for (uint32_t i = 0; i < mlen; ++i) {
-            n_inexact += _b[i];
-        }
-        if (n_inexact >= mlen) {
-            fprintf(stderr, "[%s:%d %s] Motif is ill defined\n", __FILE__, __LINE__, __FUNCTION__);
-            exit(1);
-        }
-        motif->set_indicator(_b);
-    } else {
-        ru.assign(_s, mlen);
-        inexact_label.resize(mlen);
-        std::fill(inexact_label.begin(), inexact_label.end(), 0);
-    }
     L = strlen(_s);
     N = 0;
     B = 1;
     E = 2;
     C = 3;
-    J = 4;
-    n_structure_state = 5;
-    std::vector<char> state_list{'N','B','E','C','J','M','I','D'};
+    n_structure_state = 4;
+    std::vector<char> state_list{'N','B','E','C','M','I','D'};
     for (uint32_t i = 0; i < state_list.size(); ++i) {
         state_label[i] = state_list[i];
     }
-    seq = (char*) malloc(sizeof(char) * (L+1));
+    seq = (char*) malloc(sizeof(char) * L);
     memcpy(seq, _s, L);
     delta_B = log2(1./mlen); // B -> M, uniform
     delta_E = log2(.1); // M -> E, uniform
@@ -46,15 +33,14 @@ WPHMM::WPHMM(const char* _s, const char* _m, bool _debug, bool* _b) {
     tro = 1. - trr;
     trr = log2(trr);
     tro = log2(tro);
-    tec = log2(0.5); // E->C
-    tej = log2(0.5); // E->J
+    tec = 0.; // E->C
     W = (double**) malloc(sizeof(double*)*(L+1));
     M = (double**) malloc(sizeof(double*)*(L+1));
     I = (double**) malloc(sizeof(double*)*(L+1));
     D = (double**) malloc(sizeof(double*)*(L+1));
     viterbi_mtx = (uint32_t**) malloc(sizeof(uint32_t*)*(L+1));
-    for (size_t i = 0; i <= L; ++i) {
-        W[i] = (double*) malloc(sizeof(double)*n_structure_state);
+    for (int32_t i = 0; i <= L; ++i) {
+        W[i] = (double*) malloc(sizeof(double)*(n_structure_state));
         M[i] = (double*) malloc(sizeof(double)*mlen);
         I[i] = (double*) malloc(sizeof(double)*mlen);
         D[i] = (double*) malloc(sizeof(double)*mlen);
@@ -65,7 +51,7 @@ WPHMM::WPHMM(const char* _s, const char* _m, bool _debug, bool* _b) {
     }
 }
 
-WPHMM::~WPHMM() {
+WPHMM_UNGAP::~WPHMM_UNGAP() {
     delete motif;
     motif = NULL;
     free(seq);
@@ -79,16 +65,10 @@ WPHMM::~WPHMM() {
     free(W); free(M); free(I); free(D); free(viterbi_mtx);
 }
 
-void WPHMM::initialize() {
-
-    if (inexact_label.size() == 0) {
-        fprintf(stderr, "[%s:%d %s] Please set ru (the input pattern is fuzzy)\n", __FILE__, __LINE__, __FUNCTION__);
-        exit(1);
-    }
+void WPHMM_UNGAP::initialize() {
     W[0][N] = 0;
     W[0][B] = tro;
     W[0][E] = -DBL_MAX/2;
-    W[0][J] = -DBL_MAX/2;
     W[0][C] = -DBL_MAX/2;
     for (int32_t i = 0; i <= L; ++i) {
         M[i][mlen-1] = -DBL_MAX/2;
@@ -100,22 +80,14 @@ void WPHMM::initialize() {
         I[0][k] = -DBL_MAX/2;
         D[0][k] = -DBL_MAX/2;
     }
-    for (int32_t k = 0; k < mlen*3+n_structure_state; ++k) {
-        viterbi_mtx[0][k] = N;
-    }
 }
 
-void WPHMM::viterbi() {
+void WPHMM_UNGAP::viterbi() {
 
     for (uint32_t i = 1; i <= L; ++i) {
 
-        W[i][B] = W[i-1][N];
+        W[i][B] = W[i-1][N] + tro;
         viterbi_mtx[i][B] = N; // N->B
-        if (W[i][B] < W[i-1][J]) {
-            W[i][B] = W[i-1][J];
-            viterbi_mtx[i][B] = J; // J->B
-        }
-        W[i][B] += tro;
 
         for (uint32_t k = 0; k < mlen; ++k) {
             uint32_t k_1 = (k==0) ? mlen-1 : k-1; // wraparound index
@@ -194,13 +166,6 @@ void WPHMM::viterbi() {
             viterbi_mtx[i][C] = viterbi_mtx[i][E]; // M->E->C
             W[i][C] = W[i][E] + tec;
         }
-
-        W[i][J] = W[i-1][J] + trr;
-        viterbi_mtx[i][J] = J; // J->J
-        if (W[i][J] <= W[i][E] + tej) {
-            viterbi_mtx[i][J] = viterbi_mtx[i][E]; // M->E->J
-            W[i][J] = W[i][E] + tej;
-        }
     }
 
     // Backtrack, segment viterbi path into segments
@@ -209,14 +174,9 @@ void WPHMM::viterbi() {
     vmle.clear(); // vmle[i] = max log(P(x[0..i]|Model)) + const.
     vmle.resize(L);
 
-    // Possible end state: C, J, M, I, D.
+    // Possible end state: C, M, I, D.
     viterbi_score = W[L][C];
     viterbi_path.push_back(C); // Ends at C
-    if (W[L][J] > viterbi_score) {
-        viterbi_score = W[L][J];
-        viterbi_path[0] = J;
-    }
-
     for (int32_t k = mlen-1; k >= 0; --k) {
         if (D[L][k] >= viterbi_score) {
             viterbi_score = D[L][k];
@@ -234,7 +194,7 @@ void WPHMM::viterbi() {
     vmle[L-1] = viterbi_score;
     viterbi_score -= L * log2((double)L/(L+1.)) - log2(1./(L+1.));
     vpath.push_back(viterbi_path.back());
-    // viterbi_path[i]: state for seq[L-i-1];
+
     uint32_t i = L;
     while (i > 1) {
         uint32_t next_state = viterbi_mtx[i][viterbi_path.back()];
@@ -246,13 +206,11 @@ void WPHMM::viterbi() {
             if (ptype == 2) {
                 i += 1;
             }
-            // if (i > 0) {
-                switch (ptype) {
-                    case 0: vmle[i-1] = M[i][k];
-                    case 1: vmle[i-1] = I[i][k];
-                    case 2: vmle[i-1] = D[i][k];
-                }
-            // }
+            switch (ptype) {
+                case 0: vmle[i-1] = M[i][k];
+                case 1: vmle[i-1] = I[i][k];
+                case 2: vmle[i-1] = D[i][k];
+            }
             if (motif->if_soft[k] && (ptype == 1)) { // Tolerated insertion, code as M
                 vpath.push_back(next_state-mlen);
                 continue;
@@ -261,9 +219,7 @@ void WPHMM::viterbi() {
                 continue;
             }
         } else {
-            // if (i > 0) {
-                vmle[i-1] = W[i][next_state];
-            // }
+            vmle[i-1] = W[i][next_state];
         }
         vpath.push_back(viterbi_path.back());
     }
@@ -271,17 +227,14 @@ void WPHMM::viterbi() {
     std::reverse(viterbi_path.begin(), viterbi_path.end());
 }
 
-void WPHMM::count_ru() {
+void WPHMM_UNGAP::count_ru() {
 
     ru_complete.resize(L);
-    for (uint32_t i = 0; i < L; ++i) {ru_complete[i] = -1;}
-    if (ru.size() == 0) {
-        error("WPHMM::count_ru pleat set repeat unit by set_ru\n");
-    }
+    std::fill(ru_complete.begin(), ru_complete.end(), -1);
     if (ru.size() == 1) {
         ru_complete[0] = (int32_t) (seq[0] == ru.at(0));
         for (uint32_t i = 1; i < L; ++i) {
-            ru_complete[i] = ru_complete[i-1] + (int32_t) (seq[i] == ru.at(0));
+            ru_complete[i] = ru_complete[i-1] + (int32_t) (seq[0] == ru.at(0));
         }
         return;
     }
@@ -300,19 +253,17 @@ void WPHMM::count_ru() {
     }
     uint32_t i = 0; // points to position in vpath
     uint32_t j = 0; // points to position in seq
+    int32_t offset = 0;
     while (vpath[i] != n_structure_state+acr && i<vpath.size()) {
         if (vpath[i]>=n_structure_state && (vpath[i]-n_structure_state)%mlen==2) {
-
+            offset++;
         } else {
             ru_complete[j] = 0;
             j++;
         }
         i++;
     }
-    if (i == vpath.size() || j >= L) {
-        error("WPHMM::count_ru Did not find repeat region.\n");
-        return;
-    }
+    if (i==vpath.size()) {return;}
     bool pre_state = 0;
     while (i < vpath.size()) {
         int32_t k = -1;
@@ -332,24 +283,19 @@ void WPHMM::count_ru() {
             pre_state = 0;
         }
         if (k>=0 && ptype==2) { // D
-
+            offset++;
         } else {
             if (ru_complete[j]<0) {ru_complete[j] = ru_complete[j-1];}
             j++;
         }
         i++;
-        if (j >= L) {
-            if (i<vpath.size() && j>=L)
-                error("WPHMM::count_ru Covered the full sequence %d, %d, %d, %d.\n", i, j, vpath.size(),L);
-            break;
-        }
     }
 }
 
 /**
-    Separate each segment consists of only M/I/D, get scores
+    Separate the segment consists of only M/I/D, get scores
 */
-void WPHMM::detect_range() {
+void WPHMM_UNGAP::detect_range() {
 
     if (ru_complete.size() < L) {
         count_ru();
@@ -373,21 +319,11 @@ void WPHMM::detect_range() {
         // i points to 1-based position of 'pre_state'
         uint32_t pos0 = i - 1; // 0-based position of previoust base
         if (pre_state < 0 && k >= 0) {
-            // First matching segment
+            // Starting a matching segment
             s_ed = pos0;
             starting_k = k;
             pre_state = 1;
-        } else if (pre_state == 0 && k >= 0) {
-            // Ending a J segment
-            s_st = pre_pos0;
-            seq_segment seg(s_st, s_ed);
-            seg.score = 0;
-            segments.push_back(seg);
-            // Starting a M segment
-            s_ed = pos0;
-            starting_k = k;
-            pre_state = 1;
-        } else if (pre_state == 1 && (ptype == J || ptype == N)) {
+        } else if (pre_state == 1 && ptype == N) {
             // Ending a M segment
             s_st = pre_pos0;
             n_ru = ru_complete[s_ed]-ru_complete[s_st];
@@ -395,8 +331,6 @@ void WPHMM::detect_range() {
             int32_t l = s_ed - s_st;
             seg.score = vmle[s_ed] - vmle[s_st-1] - l * tmm;
             segments.push_back(seg);
-            // Starting a J segment
-            s_ed = pos0;
             pre_state = 0;
         }
         pre_pos0 = pos0;
@@ -415,54 +349,19 @@ void WPHMM::detect_range() {
         seg.score = vmle[s_ed] - vmle[s_st-1] - l * tmm;
         segments.push_back(seg);
     }
-}
-
-/**
-    Pick one focal repeat region (that overlapps with the input interval)
-    Identify the rest as flanking region
-    (LATER/MAYBE: if the probabilistic model is not reliable, may need to merge
-    short junctions and perform a final non-gapped fit)
-*/
-int32_t WPHMM::select_segment(int32_t left,int32_t right) {
-    if (segments.size() == 0) {
-        return 0;
-    }
-    std::vector<uint32_t> indx;
-    for (uint32_t i = 0; i < segments.size(); ++i) {
-        seq_segment& v = segments[i];
-        if (v.match_motif && (v.p_st <= right) && (v.p_ed >= left)) {
-            indx.push_back(i);
-        }
-    }
-    if (indx.size() == 0) {
-        return 0;
-    }
-    focal_rr = segments[indx[0]];
-    // If multiple segments overlap with the indel region
-    if (indx.size() > 1) {
-        for (uint32_t i = 1; i < indx.size(); ++i) {
-            uint32_t j = indx[i];
-            if (segments[j].score > focal_rr.score) {
-                focal_rr = segments[j];
+    if (segments.size() == 0) {return;}
+    if (segments.size() > 1) {
+        warning("WPHMM_UNGAP::select_segment - multiple segments exist");
+        for (uint32_t i = 1; i < segments.size(); ++i) {
+            if (segments[i].score > focal_rr.score) {
+                focal_rr = segments[i];
             }
         }
     }
-
-    if (debug) {
-        std::cerr << "WPHMM::select_segment - focal segment\n";
-        seq_segment& v = focal_rr;
-        printf("S%d: st %d, ed %d, l %d, n_ru %d, score %.3f\t", v.match_motif, v.p_st, v.p_ed, v.l, v.nr, v.score);
-        for(uint32_t i = v.p_st; i <= v.p_ed; ++i) {
-            std::cerr << seq[i];
-        }
-        std::cerr << '\n';
-    }
-    return 1;
+    focal_rr = segments[0];
 }
 
-
-
-std::string WPHMM::get_viterbi_path() {
+std::string WPHMM_UNGAP::get_viterbi_path() {
     if (viterbi_path.size() < L) {
         viterbi();
     }
@@ -475,7 +374,7 @@ std::string WPHMM::get_viterbi_path() {
     return path.str();
 }
 
-std::string WPHMM::print_viterbi_path() {
+std::string WPHMM_UNGAP::print_viterbi_path() {
     if (vpath.size() < L) {
         viterbi();
     }
