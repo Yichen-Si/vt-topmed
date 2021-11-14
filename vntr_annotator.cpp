@@ -36,6 +36,9 @@ int32_t VNTRAnnotator::annotate(bcf_hdr_t* h, bcf1_t* v, std::vector<candidate_f
     find_repeat_region(h, v, candidate_ru, candidate_model);
     //3. keep the best repeat model, check if qualified as VNTR
     pick_top_candidates(candidate_model, mode);
+    if (debug && candidate_ru.size() > 0) {
+        std::cerr << "============================================\n";
+    }
 
     return candidate_model.size();
 }
@@ -47,8 +50,9 @@ void VNTRAnnotator::pick_top_candidates(std::vector<candidate_fuzzy_motif>& cand
     std::sort(candidate_model.begin(), candidate_model.end());
     auto it = candidate_model.begin();
     bool ex = 0, fz = 0;
+    double max_score = it->viterbi_score;
     while (it != candidate_model.end()) {
-        if (is_vntr(*it, mode)) {
+        if (is_vntr(*it, mode) && (it->viterbi_score > max_score*0.8) ) {
             if (it->inexact && (!fz)) {
                 fz = 1;
                 it++;
@@ -138,6 +142,7 @@ void VNTRAnnotator::find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candida
     int32_t start0 = 0, end0 = 0; // genome pos of the whole query
     int32_t spiked_st = 0, spiked_ed = 0; // relative pos of the longest allele
     int32_t seq_len;
+    bool is_insertion = 0;
     char** alleles = bcf_get_allele(v);
     std::string focal_seq(alleles[0]);
     int32_t indel_end = v->pos + focal_seq.size() - 1; // 0-based, inclusive
@@ -147,6 +152,7 @@ void VNTRAnnotator::find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candida
     end0   = indel_end + extend_bp;
     if (strlen(alleles[1]) > strlen(alleles[0])) {
         focal_seq = alleles[1];
+        is_insertion = 1;
     }
     focal_seq = focal_seq.substr(1);
     std::string query = faidx_fetch_seq(fai, chrom, start0, pos1-1, &seq_len);
@@ -178,7 +184,6 @@ if (debug) {
                 std::cerr << std::endl;
             }
             tmp = inexact_label;
-            // wphmm = new WPHMM(query.c_str(), unit.c_str(), debug);
         } else {
             unit = "";
             for (size_t i = 0; i < s.ru.size(); ++i) {
@@ -203,11 +208,21 @@ if (debug) {
         bool base_relax[m];
         std::copy(tmp.begin(), tmp.end(), base_relax);
         WPHMM* wphmm = new WPHMM(query.c_str(), unit.c_str(), debug, base_relax);
+// std::cerr << "Construct WPHMM\n";
         // // Run HMM
         wphmm->set_ru(display_ru, inexact_label);
         wphmm->initialize();
-        wphmm->viterbi();
+// std::cerr << "Initialize WPHMM\n";
+        // wphmm->viterbi();
+        std::string vpath = wphmm->print_viterbi_path();
+// std::cerr << "Viterbi WPHMM\n";
+        wphmm->count_ru();
+// for (auto & v : wphmm->ru_complete) {
+//     std::cerr << v;
+// }
+// std::cerr << '\n';
         wphmm->detect_range();
+// std::cerr << "Detect range WPHMM\n";
         if (wphmm->select_segment(spiked_st, spiked_ed)) {
             seq_segment& rr = wphmm->focal_rr;
             int32_t real_st = start0 + rr.p_st;
@@ -216,8 +231,15 @@ if (debug) {
                 real_ed -= focal_seq.size();
             }
             candidate_fuzzy_motif model(display_ru, inexact_label, real_st, real_ed, rr.nr, rr.score);
+            if (is_insertion) {
+                if (wphmm->vmle[spiked_ed]-wphmm->vmle[spiked_st-1] - focal_seq.size()*wphmm->tmm > 0) {
+                    model.insertion_relevant = 1;
+                    model.insertion = focal_seq;
+                }
+            }
             candidate_model.push_back(model);
         }
+
         delete wphmm;
         wphmm = NULL;
     }
@@ -395,7 +417,12 @@ int32_t VNTRAnnotator::if_homopoly(const char* chrom, int32_t left, int32_t righ
      uint32_t rlen = motif.ed - motif.st + 1;
 
      if (mode==VITERBI_VNTR) {
-         return ((rlen - mlen) >= 6 && motif.n_ru>=2 && motif.viterbi_score >= 3.);
+         if (motif.viterbi_score >= 3.) {
+             if (mlen==1 && motif.n_ru / rlen >= 0.85) {
+                 return true;
+             }
+             return ((rlen - mlen) >= 6 && motif.n_ru>=2);
+         }
      }
      else if (mode==WILLEMS_2014_STR)
      {

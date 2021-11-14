@@ -209,19 +209,19 @@ void WPHMM::viterbi() {
     vmle.clear(); // vmle[i] = max log(P(x[0..i]|Model)) + const.
     vmle.resize(L);
 
-    // Possible end state: C, J, M, I, D.
+    // Possible end state: C, J, M, I
     viterbi_score = W[L][C];
-    viterbi_path.push_back(C); // Ends at C
+    viterbi_path.push_back(C); // Ends at C (seq[L-1] is in state C)
     if (W[L][J] > viterbi_score) {
         viterbi_score = W[L][J];
         viterbi_path[0] = J;
     }
 
     for (int32_t k = mlen-1; k >= 0; --k) {
-        if (D[L][k] >= viterbi_score) {
-            viterbi_score = D[L][k];
-            viterbi_path[0] = n_structure_state+mlen*2+k;
-        }
+        // if (D[L][k] >= viterbi_score) {
+        //     viterbi_score = D[L][k];
+        //     viterbi_path[0] = n_structure_state+mlen*2+k;
+        // }
         if (I[L][k] >= viterbi_score) {
             viterbi_score = I[L][k];
             viterbi_path[0] = n_structure_state+mlen*1+k;
@@ -234,25 +234,22 @@ void WPHMM::viterbi() {
     vmle[L-1] = viterbi_score;
     viterbi_score -= L * log2((double)L/(L+1.)) - log2(1./(L+1.));
     vpath.push_back(viterbi_path.back());
-    // viterbi_path[i]: state for seq[L-i-1];
     uint32_t i = L;
     while (i > 1) {
         uint32_t next_state = viterbi_mtx[i][viterbi_path.back()];
         viterbi_path.push_back(next_state);
         i -= 1;
-        if (next_state > n_structure_state) {
+        if (next_state >= n_structure_state) {
             uint32_t ptype = (next_state-n_structure_state)/mlen;
             uint32_t k = (next_state-n_structure_state) % mlen;
+            switch (ptype) {
+                case 0: vmle[i-1] = M[i][k];
+                case 1: vmle[i-1] = I[i][k];
+                // case 2: vmle[i-1] = D[i][k];
+            }
             if (ptype == 2) {
                 i += 1;
             }
-            // if (i > 0) {
-                switch (ptype) {
-                    case 0: vmle[i-1] = M[i][k];
-                    case 1: vmle[i-1] = I[i][k];
-                    case 2: vmle[i-1] = D[i][k];
-                }
-            // }
             if (motif->if_soft[k] && (ptype == 1)) { // Tolerated insertion, code as M
                 vpath.push_back(next_state-mlen);
                 continue;
@@ -261,12 +258,11 @@ void WPHMM::viterbi() {
                 continue;
             }
         } else {
-            // if (i > 0) {
-                vmle[i-1] = W[i][next_state];
-            // }
+            vmle[i-1] = W[i][next_state];
         }
-        vpath.push_back(viterbi_path.back());
+        vpath.push_back(next_state);
     }
+    // viterbi_path[0] holds the state of seq[0]
     std::reverse(vpath.begin(), vpath.end());
     std::reverse(viterbi_path.begin(), viterbi_path.end());
 }
@@ -276,7 +272,7 @@ void WPHMM::count_ru() {
     ru_complete.resize(L);
     for (uint32_t i = 0; i < L; ++i) {ru_complete[i] = -1;}
     if (ru.size() == 0) {
-        error("WPHMM::count_ru pleat set repeat unit by set_ru\n");
+        error("WPHMM::count_ru please set repeat unit by set_ru\n");
     }
     if (ru.size() == 1) {
         ru_complete[0] = (int32_t) (seq[0] == ru.at(0));
@@ -300,7 +296,7 @@ void WPHMM::count_ru() {
     }
     uint32_t i = 0; // points to position in vpath
     uint32_t j = 0; // points to position in seq
-    while (vpath[i] != n_structure_state+acr && i<vpath.size()) {
+    while (i<vpath.size() && vpath[i] != n_structure_state+acr) {
         if (vpath[i]>=n_structure_state && (vpath[i]-n_structure_state)%mlen==2) {
 
         } else {
@@ -314,7 +310,13 @@ void WPHMM::count_ru() {
         return;
     }
     bool pre_state = 0;
-    while (i < vpath.size()) {
+    if (j == 0) { // The first base is in M
+        ru_complete[j] = 0;
+        pre_state = 1;
+        i += 1;
+        j += 1;
+    }
+    while (i < vpath.size() && j < L) {
         int32_t k = -1;
         int32_t ptype = vpath[i];
         if (vpath[i] >= n_structure_state) {
@@ -323,7 +325,7 @@ void WPHMM::count_ru() {
         }
         if (k<0) {
             pre_state = 0;
-        } else if (k==racr && ptype==0 && pre_state == 1) { // M[m-1], try to end a ru
+        } else if (k==racr && ptype==0 && pre_state == 1) { // M[m-1], a ru completed
             ru_complete[j] = ru_complete[j-1] + 1;
             pre_state = 0;
         } else if (k==acr && ptype==0 && pre_state == 0) { // M[0], try to start a ru
@@ -338,12 +340,12 @@ void WPHMM::count_ru() {
             j++;
         }
         i++;
-        if (j >= L) {
-            if (i<vpath.size() && j>=L)
-                error("WPHMM::count_ru Covered the full sequence %d, %d, %d, %d.\n", i, j, vpath.size(),L);
-            break;
-        }
     }
+    while (j < L) {
+        ru_complete[j] = ru_complete[j-1];
+        j++;
+    }
+
 }
 
 /**
@@ -354,15 +356,14 @@ void WPHMM::detect_range() {
     if (ru_complete.size() < L) {
         count_ru();
     }
-    int32_t s_ed = -1, s_st = -1;
+    int32_t s_ed = -1, s_st = -1; // 0-based position in seq, inclusive
     int32_t n_ru = 0;
-    int32_t pre_state = -1;
-    int32_t starting_k = -1;
+    int32_t pre_state  = -1; // 1 if seq[i-2] is inside a M/I/D segment, 0 o.w.
     uint32_t offset = 10;
-    int32_t i = L;
-    int32_t j = viterbi_path.size()-1;
+    int32_t i = L; // points to 1-based position in seq
+    int32_t j = viterbi_path.size()-1; // points to the state corresponds to seq[i-1]
     uint32_t next_state = viterbi_path[j];
-    uint32_t pre_pos0 = L-1;
+    uint32_t pre_pos0 = L;
     while (i > 0) {
         uint32_t ptype = next_state;
         int32_t k = -1;
@@ -370,12 +371,11 @@ void WPHMM::detect_range() {
             ptype = offset + (next_state-n_structure_state)/mlen;
             k = (next_state-n_structure_state) % mlen;
         }
-        // i points to 1-based position of 'pre_state'
-        uint32_t pos0 = i - 1; // 0-based position of previoust base
+        // seq[i-1] is at viterbi_path[j]
+        uint32_t pos0 = i - 1;
         if (pre_state < 0 && k >= 0) {
             // First matching segment
             s_ed = pos0;
-            starting_k = k;
             pre_state = 1;
         } else if (pre_state == 0 && k >= 0) {
             // Ending a J segment
@@ -385,15 +385,14 @@ void WPHMM::detect_range() {
             segments.push_back(seg);
             // Starting a M segment
             s_ed = pos0;
-            starting_k = k;
             pre_state = 1;
         } else if (pre_state == 1 && (ptype == J || ptype == N)) {
             // Ending a M segment
             s_st = pre_pos0;
-            n_ru = ru_complete[s_ed]-ru_complete[s_st];
+            n_ru = ru_complete[s_ed]-ru_complete[s_st]; // only count full ru completely inside the segment
             seq_segment seg(s_st, s_ed, n_ru, 1);
-            int32_t l = s_ed - s_st;
-            seg.score = vmle[s_ed] - vmle[s_st-1] - l * tmm;
+            // score is mle of the segment normalized by #transitions, could change null model later
+            seg.score = vmle[s_ed] - vmle[s_st-1] - (s_ed - s_st) * tmm;
             segments.push_back(seg);
             // Starting a J segment
             s_ed = pos0;
@@ -401,7 +400,7 @@ void WPHMM::detect_range() {
         }
         pre_pos0 = pos0;
         if (ptype != offset + 2) {
-            i -= 1;
+            i -= 1; // only need to move the pointer in seq in state != D
         }
         j -= 1;
         next_state = viterbi_path[j];
@@ -411,8 +410,7 @@ void WPHMM::detect_range() {
         s_st = 0;
         n_ru = ru_complete[s_ed]-ru_complete[s_st];
         seq_segment seg(s_st, s_ed, n_ru, 1);
-        int32_t l = s_ed - s_st;
-        seg.score = vmle[s_ed] - vmle[s_st-1] - l * tmm;
+        seg.score = vmle[s_ed] - (s_ed - s_st) * tmm;
         segments.push_back(seg);
     }
 }
@@ -448,15 +446,15 @@ int32_t WPHMM::select_segment(int32_t left,int32_t right) {
         }
     }
 
-    if (debug) {
-        std::cerr << "WPHMM::select_segment - focal segment\n";
-        seq_segment& v = focal_rr;
-        printf("S%d: st %d, ed %d, l %d, n_ru %d, score %.3f\t", v.match_motif, v.p_st, v.p_ed, v.l, v.nr, v.score);
-        for(uint32_t i = v.p_st; i <= v.p_ed; ++i) {
-            std::cerr << seq[i];
-        }
-        std::cerr << '\n';
-    }
+    // if (debug) {
+    //     std::cerr << "WPHMM::select_segment - focal segment\n";
+    //     seq_segment& v = focal_rr;
+    //     printf("S%d: st %d, ed %d, l %d, n_ru %d, score %.3f\t", v.match_motif, v.p_st, v.p_ed, v.l, v.nr, v.score);
+    //     for(uint32_t i = v.p_st; i <= v.p_ed; ++i) {
+    //         std::cerr << seq[i];
+    //     }
+    //     std::cerr << '\n';
+    // }
     return 1;
 }
 

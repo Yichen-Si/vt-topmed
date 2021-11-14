@@ -1,10 +1,14 @@
 #include "wphmm_ungapped.h"
 
-WPHMM_UNGAP::WPHMM_UNGAP(const char* _s, const char* _m, bool _debug, bool* _b) {
+WPHMM_UNGAP::WPHMM_UNGAP(const char* _s, const char* _m, bool _debug, bool* _b, bool _c) {
     debug = _debug;
-    motif = new Motif_fuzzy_binary(_m);
-    if (_b != nullptr) {
-        motif->set_indicator(_b);
+    if (_c && (_b != nullptr)) {
+        expanding_motif(_m, _b);
+    } else {
+        motif = new Motif_fuzzy_binary(_m);
+        if (_b != nullptr) {
+            motif->set_indicator(_b);
+        }
     }
     motif->set_emission(.05); // Mismatch probability
     mlen = motif->mlen;
@@ -63,6 +67,24 @@ WPHMM_UNGAP::~WPHMM_UNGAP() {
         free(viterbi_mtx[i]);
     }
     free(W); free(M); free(I); free(D); free(viterbi_mtx);
+}
+
+void WPHMM_UNGAP::expanding_motif(const char* _m, bool* _b) {
+    int32_t m = strlen(_m);
+    std::string unit;
+    std::vector<bool> tmp;
+    for (uint32_t i = 0; i < m; ++i) {
+        unit += _m[i];
+        tmp.push_back(0);
+        if (_b[i]) {
+            unit += _m[i];
+            tmp.push_back(1);
+        }
+    }
+    m = unit.size();
+    bool base_relax[m];
+    std::copy(tmp.begin(), tmp.end(), base_relax);
+    motif = new Motif_fuzzy_binary(unit.c_str(), base_relax);
 }
 
 void WPHMM_UNGAP::initialize() {
@@ -174,14 +196,14 @@ void WPHMM_UNGAP::viterbi() {
     vmle.clear(); // vmle[i] = max log(P(x[0..i]|Model)) + const.
     vmle.resize(L);
 
-    // Possible end state: C, M, I, D.
+    // Possible end state: C, M, I
     viterbi_score = W[L][C];
     viterbi_path.push_back(C); // Ends at C
     for (int32_t k = mlen-1; k >= 0; --k) {
-        if (D[L][k] >= viterbi_score) {
-            viterbi_score = D[L][k];
-            viterbi_path[0] = n_structure_state+mlen*2+k;
-        }
+        // if (D[L][k] >= viterbi_score) {
+        //     viterbi_score = D[L][k];
+        //     viterbi_path[0] = n_structure_state+mlen*2+k;
+        // }
         if (I[L][k] >= viterbi_score) {
             viterbi_score = I[L][k];
             viterbi_path[0] = n_structure_state+mlen*1+k;
@@ -265,7 +287,13 @@ void WPHMM_UNGAP::count_ru() {
     }
     if (i==vpath.size()) {return;}
     bool pre_state = 0;
-    while (i < vpath.size()) {
+    if (j == 0) { // The first base is in M
+        ru_complete[j] = 0;
+        pre_state = 1;
+        i += 1;
+        j += 1;
+    }
+    while (i < vpath.size() && j < L) {
         int32_t k = -1;
         int32_t ptype = vpath[i];
         if (vpath[i] >= n_structure_state) {
@@ -290,6 +318,10 @@ void WPHMM_UNGAP::count_ru() {
         }
         i++;
     }
+    while (j < L) {
+        ru_complete[j] = ru_complete[j-1];
+        j++;
+    }
 }
 
 /**
@@ -303,12 +335,11 @@ void WPHMM_UNGAP::detect_range() {
     int32_t s_ed = -1, s_st = -1;
     int32_t n_ru = 0;
     int32_t pre_state = -1;
-    int32_t starting_k = -1;
     uint32_t offset = 10;
     int32_t i = L;
     int32_t j = viterbi_path.size()-1;
     uint32_t next_state = viterbi_path[j];
-    uint32_t pre_pos0 = L-1;
+    uint32_t pre_pos0 = L;
     while (i > 0) {
         uint32_t ptype = next_state;
         int32_t k = -1;
@@ -316,20 +347,17 @@ void WPHMM_UNGAP::detect_range() {
             ptype = offset + (next_state-n_structure_state)/mlen;
             k = (next_state-n_structure_state) % mlen;
         }
-        // i points to 1-based position of 'pre_state'
-        uint32_t pos0 = i - 1; // 0-based position of previoust base
+        uint32_t pos0 = i - 1;
         if (pre_state < 0 && k >= 0) {
             // Starting a matching segment
             s_ed = pos0;
-            starting_k = k;
             pre_state = 1;
         } else if (pre_state == 1 && ptype == N) {
             // Ending a M segment
             s_st = pre_pos0;
             n_ru = ru_complete[s_ed]-ru_complete[s_st];
             seq_segment seg(s_st, s_ed, n_ru, 1);
-            int32_t l = s_ed - s_st;
-            seg.score = vmle[s_ed] - vmle[s_st-1] - l * tmm;
+            seg.score = vmle[s_ed] - vmle[s_st-1] - (s_ed - s_st) * tmm;
             segments.push_back(seg);
             pre_state = 0;
         }
@@ -345,8 +373,7 @@ void WPHMM_UNGAP::detect_range() {
         s_st = 0;
         n_ru = ru_complete[s_ed]-ru_complete[s_st];
         seq_segment seg(s_st, s_ed, n_ru, 1);
-        int32_t l = s_ed - s_st;
-        seg.score = vmle[s_ed] - vmle[s_st-1] - l * tmm;
+        seg.score = vmle[s_ed] - (s_ed - s_st) * tmm;
         segments.push_back(seg);
     }
     if (segments.size() == 0) {return;}

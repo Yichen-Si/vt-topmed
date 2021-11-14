@@ -42,7 +42,7 @@ public:
     std::map<char, float> random_base;
     std::vector<char> alphabet{'A','C','G','T'};
 
-WPHMM_UNGAP(const char* _s, const char* _m, bool _debug = 0, bool* _b = nullptr);
+WPHMM_UNGAP(const char* _s, const char* _m, bool _debug = 0, bool* _b = nullptr, bool _c = 0);
 ~WPHMM_UNGAP();
 
 void set_ru(std::string& _s, std::vector<bool>& _v) {
@@ -59,6 +59,8 @@ void detect_range();
 
 std::string get_viterbi_path();
 std::string print_viterbi_path();
+
+void expanding_motif(const char* _m, bool* _b);
 
 };
 

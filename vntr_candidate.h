@@ -30,6 +30,8 @@ struct candidate_fuzzy_motif {
     int32_t n_ru;   // number of (noninterrupted) ru matched
     double viterbi_score;
     int32_t l;
+    bool insertion_relevant;
+    std::string insertion;
     candidate_fuzzy_motif(std::string _u, std::vector<bool> _w, int32_t _s, int32_t _e, int32_t _n, double _v) : ru(_u), label(_w), st(_s), ed(_e), n_ru(_n), viterbi_score(_v) {
             mlen = ru.length();
             inexact = 0;
@@ -37,10 +39,49 @@ struct candidate_fuzzy_motif {
                 inexact = inexact || label[i];
             }
             l = ed-st+1;
+            insertion_relevant=0;
         }
     candidate_fuzzy_motif() {}
     bool operator<(const candidate_fuzzy_motif & rhs) const {
         return (viterbi_score > rhs.viterbi_score);
+    }
+
+    int32_t ru_compare(candidate_fuzzy_motif& rhs) {
+        if (ru.length() != rhs.ru.length()) {
+            return 3; // Repeat unit incompatible
+        }
+        if (ru == rhs.ru && label == rhs.label) {
+            return 0; // Equivalent
+        }
+        bool equal_seq = (ru == rhs.ru);
+        uint32_t phase = 1;
+        while (phase < mlen && (!equal_seq)) {
+            std::string cru = ru.substr(phase, mlen-phase)+ru.substr(0,phase);
+            if (cru == rhs.ru) {
+                equal_seq = 1;
+                break;
+            }
+            phase++;
+        }
+        if (!equal_seq) {
+            return 3; // Repeat unit incompatible
+        }
+        bool equal_cir = 1;
+        for (int32_t i = 0; i < mlen; ++i) {
+            if (label[(i+phase)%mlen] != rhs.label[i]) {
+                equal_cir = 0;
+                break;
+            }
+        }
+        if (equal_cir) {
+            return 0; // Circular equivalent
+        }
+        // Compatible, pick the model with higher score
+        if (viterbi_score >= rhs.viterbi_score) {
+            return 1; // left unit has higher score
+        } else {
+            return 2; //
+        }
     }
 };
 
@@ -100,51 +141,28 @@ class VNTR_candidate
     public:
 
     bool debug;
+    faidx_t* fai;
     int32_t rid;
     candidate_fuzzy_motif motif;   // store st/ed/len w.r.t. reference
-    uint32_t mlen, rlen_r, n_ru_r; // duplicated info
-    uint32_t rlen_l, n_ru_l;       // info w.r.t. longest mosaic sequence
-    double score_r;
+    int32_t st, ed, mlen; // not equal to motif if multiple candidate models are merged
+    int32_t rlen_r, n_ru_r; // info w.r.t. reference seq
+    int32_t rlen_l, n_ru_l; // info w.r.t. longest mosaic sequence
+    double score_r, score_l;
     const char* chrom;
-    // std::vector<std::pair<std::string, std::vector<bool> > > alternative_ru;
     std::string repeat_ref;     // repeat region in ref
     std::string lflank;         // left flank
     std::string rflank;         // right flank
     std::list<std::pair<int32_t, std::string> > insertions; // maintain sorted
     // std::set<int32_t> inserted_pos;
     std::string merged_longest_rr; // could make this easier by keeping only the longest allele
-    bool updated = 0;
+    bool need_refit;
+    // Criteria to decide if merge two candidates
+    double critical_ovlp;
+    double max_interrupt;
+    std::vector<candidate_fuzzy_motif> alternative_models;
 
-    VNTR_candidate(bcf_hdr_t* h, int32_t _r, candidate_fuzzy_motif& _m, bool _b) : debug(_b), rid(_r), motif(_m) {
-        mlen   = motif.mlen;
-        rlen_l = motif.l;
-        rlen_r = motif.ed - motif.st + 1;
-        n_ru_r = motif.n_ru;
-        n_ru_l = motif.n_ru;
-        chrom = h->id[BCF_DT_CTG][rid].key;
-    }
+    VNTR_candidate(faidx_t* _f, bcf_hdr_t* h, bcf1_t* v, candidate_fuzzy_motif& _m, bool _b);
     VNTR_candidate() {}
-
-    void add_insertion(int32_t _p, std::string _s);
-    void combined_insertions(faidx_t* fai);
-    int32_t get_pos_in_ref(int32_t p_rel);
-
-    /**
-     * Merge two VNTR record if possible. (1 if merge successfully)
-     */
-    int32_t merge(VNTR_candidate& rt, int32_t min_overlap = 1);
-
-    /**
-     * 0: overlap, -1: <rt, 1: >rt.
-     */
-    int32_t intersect(VNTR_candidate& rt, int32_t min_overlap = 1);
-
-    /**
-     * If two repeat models are compatible.
-       0 - Equivalent; 3 - Incompatible;
-       1 - Left is better; 2 - Right is better.
-     */
-    int32_t ru_compair(candidate_fuzzy_motif& rhs);
 
     bool operator<(const VNTR_candidate& rhs) const {
         if (motif.st == rhs.motif.st) {
@@ -153,10 +171,51 @@ class VNTR_candidate
         return (motif.st < rhs.motif.st);
     }
 
+    void set_merging_criteria(double _c, double _i) {
+        critical_ovlp = _c;
+        max_interrupt = _i;
+    }
+
+    void add_insertion(int32_t _p, std::string _s);
+    void combine_insertions();
+    int32_t get_pos_in_ref(int32_t p_rel);
+
     /**
-     * Fit an ungapped local alignment if updates have been made
+     * Merge two VNTR record if possible.
+       0 if not merged
+       1 if merged and the query does not need to seek further
+       2 if merged but the query needs to check with others in the buffer
      */
-    bool model_refit(faidx_t* fai, int32_t flk=10);
+    int32_t merge(VNTR_candidate& rt);
+
+    /**
+     * Number of overlapped bases.
+       0 for adjacent
+       < 0 for nonoverlapping, with absolute value being the distance
+     */
+    int32_t intersect(VNTR_candidate& rt);
+
+    /**
+     * If two repeat models are compatible.
+       0 - Equivalent; 3 - Incompatible;
+       1/2 Compatible, 1 Left has higher score.
+     */
+    int32_t ru_compare(candidate_fuzzy_motif& rhs);
+
+    double fit_alt_model(candidate_fuzzy_motif& rhs);
+
+    /**
+     * Fit ungapped local alignment model
+     */
+    void model_refit();
+    bool choose_model();
+    void evaluate_models();
+    void evaluate_models(uint32_t index);
+
+    /**
+     * Prepare this TR for output
+     */
+    bool finalize(int32_t flk = 10);
 
     /**
      * Print object.
