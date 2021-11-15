@@ -54,7 +54,7 @@ void set_emission(float* _e) {motif->set_emission(_e);}
 void set_emission(float _e)  {motif->set_emission(_e);}
 
 void viterbi();
-void count_ru();
+bool count_ru();
 void detect_range();
 
 std::string get_viterbi_path();

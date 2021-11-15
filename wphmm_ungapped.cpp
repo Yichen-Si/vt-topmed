@@ -216,22 +216,21 @@ void WPHMM_UNGAP::viterbi() {
     vmle[L-1] = viterbi_score;
     viterbi_score -= L * log2((double)L/(L+1.)) - log2(1./(L+1.));
     vpath.push_back(viterbi_path.back());
-
     uint32_t i = L;
     while (i > 1) {
         uint32_t next_state = viterbi_mtx[i][viterbi_path.back()];
         viterbi_path.push_back(next_state);
         i -= 1;
-        if (next_state > n_structure_state) {
+        if (next_state >= n_structure_state) {
             uint32_t ptype = (next_state-n_structure_state)/mlen;
             uint32_t k = (next_state-n_structure_state) % mlen;
-            if (ptype == 2) {
-                i += 1;
-            }
             switch (ptype) {
                 case 0: vmle[i-1] = M[i][k];
                 case 1: vmle[i-1] = I[i][k];
-                case 2: vmle[i-1] = D[i][k];
+                // case 2: vmle[i-1] = D[i][k];
+            }
+            if (ptype == 2) {
+                i += 1;
             }
             if (motif->if_soft[k] && (ptype == 1)) { // Tolerated insertion, code as M
                 vpath.push_back(next_state-mlen);
@@ -249,16 +248,16 @@ void WPHMM_UNGAP::viterbi() {
     std::reverse(viterbi_path.begin(), viterbi_path.end());
 }
 
-void WPHMM_UNGAP::count_ru() {
+bool WPHMM_UNGAP::count_ru() {
 
     ru_complete.resize(L);
     std::fill(ru_complete.begin(), ru_complete.end(), -1);
     if (ru.size() == 1) {
         ru_complete[0] = (int32_t) (seq[0] == ru.at(0));
         for (uint32_t i = 1; i < L; ++i) {
-            ru_complete[i] = ru_complete[i-1] + (int32_t) (seq[0] == ru.at(0));
+            ru_complete[i] = ru_complete[i-1] + (int32_t) (seq[i] == ru.at(0));
         }
-        return;
+        return 0;
     }
     // find anchor
     int32_t acr = 0, racr = 0;
@@ -275,17 +274,16 @@ void WPHMM_UNGAP::count_ru() {
     }
     uint32_t i = 0; // points to position in vpath
     uint32_t j = 0; // points to position in seq
-    int32_t offset = 0;
-    while (vpath[i] != n_structure_state+acr && i<vpath.size()) {
-        if (vpath[i]>=n_structure_state && (vpath[i]-n_structure_state)%mlen==2) {
-            offset++;
-        } else {
+    while (i<vpath.size() && vpath[i] != n_structure_state+acr) {
+        if (vpath[i] < n_structure_state+mlen*2) { // Not deletion
             ru_complete[j] = 0;
             j++;
         }
         i++;
     }
-    if (i==vpath.size()) {return;}
+    if (i==vpath.size()) {
+        return 1;
+    }
     bool pre_state = 0;
     if (j == 0) { // The first base is in M
         ru_complete[j] = 0;
@@ -311,17 +309,14 @@ void WPHMM_UNGAP::count_ru() {
             pre_state = 0;
         }
         if (k>=0 && ptype==2) { // D
-            offset++;
+
         } else {
             if (ru_complete[j]<0) {ru_complete[j] = ru_complete[j-1];}
             j++;
         }
         i++;
     }
-    while (j < L) {
-        ru_complete[j] = ru_complete[j-1];
-        j++;
-    }
+    return 0;
 }
 
 /**
@@ -330,7 +325,9 @@ void WPHMM_UNGAP::count_ru() {
 void WPHMM_UNGAP::detect_range() {
 
     if (ru_complete.size() < L) {
-        count_ru();
+        if (count_ru()) {
+            return;
+        }
     }
     int32_t s_ed = -1, s_st = -1;
     int32_t n_ru = 0;
@@ -377,6 +374,7 @@ void WPHMM_UNGAP::detect_range() {
         segments.push_back(seg);
     }
     if (segments.size() == 0) {return;}
+    focal_rr = segments[0];
     if (segments.size() > 1) {
         warning("WPHMM_UNGAP::select_segment - multiple segments exist");
         for (uint32_t i = 1; i < segments.size(); ++i) {
@@ -385,7 +383,6 @@ void WPHMM_UNGAP::detect_range() {
             }
         }
     }
-    focal_rr = segments[0];
 }
 
 std::string WPHMM_UNGAP::get_viterbi_path() {

@@ -267,7 +267,7 @@ void WPHMM::viterbi() {
     std::reverse(viterbi_path.begin(), viterbi_path.end());
 }
 
-void WPHMM::count_ru() {
+bool WPHMM::count_ru() {
 
     ru_complete.resize(L);
     for (uint32_t i = 0; i < L; ++i) {ru_complete[i] = -1;}
@@ -279,7 +279,7 @@ void WPHMM::count_ru() {
         for (uint32_t i = 1; i < L; ++i) {
             ru_complete[i] = ru_complete[i-1] + (int32_t) (seq[i] == ru.at(0));
         }
-        return;
+        return 0;
     }
     // find anchor
     int32_t acr = 0, racr = 0;
@@ -297,17 +297,14 @@ void WPHMM::count_ru() {
     uint32_t i = 0; // points to position in vpath
     uint32_t j = 0; // points to position in seq
     while (i<vpath.size() && vpath[i] != n_structure_state+acr) {
-        if (vpath[i]>=n_structure_state && (vpath[i]-n_structure_state)%mlen==2) {
-
-        } else {
+        if (vpath[i] < n_structure_state+mlen*2) {
             ru_complete[j] = 0;
             j++;
         }
         i++;
     }
     if (i == vpath.size() || j >= L) {
-        error("WPHMM::count_ru Did not find repeat region.\n");
-        return;
+        return 1;
     }
     bool pre_state = 0;
     if (j == 0) { // The first base is in M
@@ -316,7 +313,7 @@ void WPHMM::count_ru() {
         i += 1;
         j += 1;
     }
-    while (i < vpath.size() && j < L) {
+    while (i < vpath.size()) {
         int32_t k = -1;
         int32_t ptype = vpath[i];
         if (vpath[i] >= n_structure_state) {
@@ -333,7 +330,7 @@ void WPHMM::count_ru() {
         } else if (pre_state == 1 && ptype != 0) { // I/D
             pre_state = 0;
         }
-        if (k>=0 && ptype==2) { // D
+        if (vpath[i]>=n_structure_state+2*mlen) { // D
 
         } else {
             if (ru_complete[j]<0) {ru_complete[j] = ru_complete[j-1];}
@@ -341,11 +338,12 @@ void WPHMM::count_ru() {
         }
         i++;
     }
-    while (j < L) {
-        ru_complete[j] = ru_complete[j-1];
-        j++;
-    }
-
+    // if (i!=vpath.size() || j!=L) {
+    //     std::cerr << print_viterbi_path() << '\n';
+    //     printf("%s\n", seq);
+    //     error("WPHMM::count_ru %d, %d\t%d, %d\t%d, %d.",L,vpath.size(),j,i,vpath[0],vpath.back());
+    // }
+    return 0;
 }
 
 /**
@@ -354,10 +352,12 @@ void WPHMM::count_ru() {
 void WPHMM::detect_range() {
 
     if (ru_complete.size() < L) {
-        count_ru();
+        if (count_ru()) {
+            return;
+        }
     }
     int32_t s_ed = -1, s_st = -1; // 0-based position in seq, inclusive
-    int32_t n_ru = 0;
+    int32_t n_ru = 0, n_ins = 0;
     int32_t pre_state  = -1; // 1 if seq[i-2] is inside a M/I/D segment, 0 o.w.
     uint32_t offset = 10;
     int32_t i = L; // points to 1-based position in seq
@@ -377,6 +377,7 @@ void WPHMM::detect_range() {
             // First matching segment
             s_ed = pos0;
             pre_state = 1;
+            n_ins = (ptype == offset+1);
         } else if (pre_state == 0 && k >= 0) {
             // Ending a J segment
             s_st = pre_pos0;
@@ -386,17 +387,21 @@ void WPHMM::detect_range() {
             // Starting a M segment
             s_ed = pos0;
             pre_state = 1;
+            n_ins = (ptype == offset+1);
         } else if (pre_state == 1 && (ptype == J || ptype == N)) {
             // Ending a M segment
             s_st = pre_pos0;
             n_ru = ru_complete[s_ed]-ru_complete[s_st]; // only count full ru completely inside the segment
-            seq_segment seg(s_st, s_ed, n_ru, 1);
+            seq_segment seg(s_st, s_ed, n_ru, s_ed-s_st+1-n_ins);
             // score is mle of the segment normalized by #transitions, could change null model later
             seg.score = vmle[s_ed] - vmle[s_st-1] - (s_ed - s_st) * tmm;
             segments.push_back(seg);
             // Starting a J segment
             s_ed = pos0;
             pre_state = 0;
+            n_ins = 0;
+        } else if (pre_state == 1 && ptype == offset+1) {
+            n_ins++;
         }
         pre_pos0 = pos0;
         if (ptype != offset + 2) {
@@ -409,7 +414,7 @@ void WPHMM::detect_range() {
         // Ending last M segment
         s_st = 0;
         n_ru = ru_complete[s_ed]-ru_complete[s_st];
-        seq_segment seg(s_st, s_ed, n_ru, 1);
+        seq_segment seg(s_st, s_ed, n_ru, s_ed-s_st+1-n_ins);
         seg.score = vmle[s_ed] - (s_ed - s_st) * tmm;
         segments.push_back(seg);
     }

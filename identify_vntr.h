@@ -1,6 +1,7 @@
 #ifndef IDENTIFY_VNTR_H
 #define IDENTIFY_VNTR_H
 
+#include <iterator>
 #include "htslib/kstring.h"
 #include "bcf_ordered_reader.h"
 #include "bcf_ordered_writer.h"

@@ -28,11 +28,12 @@ struct candidate_fuzzy_motif {
     bool inexact;
     int32_t st, ed; // zero based, inclusive. genome position of repeat region
     int32_t n_ru;   // number of (noninterrupted) ru matched
-    double viterbi_score;
+    double viterbi_score, concordance;
     int32_t l;
     bool insertion_relevant;
     std::string insertion;
-    candidate_fuzzy_motif(std::string _u, std::vector<bool> _w, int32_t _s, int32_t _e, int32_t _n, double _v) : ru(_u), label(_w), st(_s), ed(_e), n_ru(_n), viterbi_score(_v) {
+
+    candidate_fuzzy_motif(std::string _u, std::vector<bool> _w, int32_t _s, int32_t _e, int32_t _n, double _v, int32_t _c = 0) : ru(_u), label(_w), st(_s), ed(_e), n_ru(_n), viterbi_score(_v) {
             mlen = ru.length();
             inexact = 0;
             for (uint32_t i = 0; i < mlen; ++i) {
@@ -40,18 +41,36 @@ struct candidate_fuzzy_motif {
             }
             l = ed-st+1;
             insertion_relevant=0;
+            concordance = (double) _c / l; 
         }
     candidate_fuzzy_motif() {}
+
     bool operator<(const candidate_fuzzy_motif & rhs) const {
         return (viterbi_score > rhs.viterbi_score);
     }
 
+    /**
+     * If two repeat models are compatible.
+     * 0 - Equivalent; 3 - Incompatible;
+     * 1 - Compatible, non-inclusive;
+     * 2 - Inclusive.
+     */
     int32_t ru_compare(candidate_fuzzy_motif& rhs) {
-        if (ru.length() != rhs.ru.length()) {
-            return 3; // Repeat unit incompatible
-        }
         if (ru == rhs.ru && label == rhs.label) {
             return 0; // Equivalent
+        }
+        std::set<char> s1, s2;
+        std::for_each(ru.begin(), ru.end(), [&s1] (char c) -> void { s1.insert(c);});
+        std::for_each(rhs.ru.begin(), rhs.ru.end(), [&s2] (char c) -> void { s2.insert(c);});
+        if (s1 != s2) {
+            return 3;
+        }
+        if (ru.length() != rhs.ru.length()) {
+            // Check if one includes the other
+            if (ru.find(rhs.ru)!=std::string::npos || rhs.ru.find(ru)!=std::string::npos) {
+                return 2;
+            }
+            return 3; // Repeat unit incompatible
         }
         bool equal_seq = (ru == rhs.ru);
         uint32_t phase = 1;
@@ -76,12 +95,8 @@ struct candidate_fuzzy_motif {
         if (equal_cir) {
             return 0; // Circular equivalent
         }
-        // Compatible, pick the model with higher score
-        if (viterbi_score >= rhs.viterbi_score) {
-            return 1; // left unit has higher score
-        } else {
-            return 2; //
-        }
+        // Compatible
+        return 1;
     }
 };
 
@@ -133,8 +148,8 @@ struct candidate_unit {
 
 /**
  * Class for representing a VNTR.
- *
- * 2 sets of attributes for the exact and fuzzy detections of the repeat region.
+ * Hold information of multiple repeat models
+ * perhaps generated from different indels
  */
 class VNTR_candidate
 {
@@ -154,7 +169,9 @@ class VNTR_candidate
     std::string rflank;         // right flank
     std::list<std::pair<int32_t, std::string> > insertions; // maintain sorted
     // std::set<int32_t> inserted_pos;
-    std::string merged_longest_rr; // could make this easier by keeping only the longest allele
+    int32_t rel_st, len_mrg;
+    std::string query;
+    // std::string merged_longest_rr; // could make this easier by keeping only the longest allele
     bool need_refit;
     // Criteria to decide if merge two candidates
     double critical_ovlp;
@@ -178,13 +195,13 @@ class VNTR_candidate
 
     void add_insertion(int32_t _p, std::string _s);
     void combine_insertions();
-    int32_t get_pos_in_ref(int32_t p_rel);
+    int32_t get_pos_in_ref(int32_t p_rel, int32_t rel_st = 0);
 
     /**
      * Merge two VNTR record if possible.
-       0 if not merged
-       1 if merged and the query does not need to seek further
-       2 if merged but the query needs to check with others in the buffer
+     * 0 if not merged
+     * 1 if merged and the query does not need to seek further
+     * 2 if merged but the query needs to check with others in the buffer
      */
     int32_t merge(VNTR_candidate& rt);
 
@@ -196,12 +213,9 @@ class VNTR_candidate
     int32_t intersect(VNTR_candidate& rt);
 
     /**
-     * If two repeat models are compatible.
-       0 - Equivalent; 3 - Incompatible;
-       1/2 Compatible, 1 Left has higher score.
+     * Fit an alternative RU to the current sequence
+     * Return viterbi score
      */
-    int32_t ru_compare(candidate_fuzzy_motif& rhs);
-
     double fit_alt_model(candidate_fuzzy_motif& rhs);
 
     /**

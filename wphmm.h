@@ -117,10 +117,10 @@ public:
 struct seq_segment {
     uint32_t p_st, p_ed; // 0-based, inclusive
     uint32_t nr;
-    bool match_motif;
+    int32_t match_motif;
     uint32_t l;
     double score;
-    seq_segment(uint32_t _s, uint32_t _e, uint32_t _n=0, bool _m=0) : p_st(_s), p_ed(_e), nr(_n), match_motif(_m) {
+    seq_segment(uint32_t _s, uint32_t _e, uint32_t _n=0, int32_t _m=0) : p_st(_s), p_ed(_e), nr(_n), match_motif(_m) {
         l = p_ed - p_st + 1;
     }
     seq_segment() {}
@@ -156,7 +156,6 @@ public:
     std::vector<int32_t> ru_complete;
     double viterbi_score;
     std::vector<double> vmle;
-    double motif_concordance;
     uint32_t rlen; // length of repeat region
     uint32_t rbeg, rend; // begin and end of the identified repeat region (relative to seq, 0-based)
     std::vector<seq_segment> segments;
@@ -177,7 +176,7 @@ void set_emission(float* _e) {motif->set_emission(_e);}
 void set_emission(float _e)  {motif->set_emission(_e);}
 
 void viterbi();
-void count_ru();
+bool count_ru();
 void detect_range();
 int32_t select_segment(int32_t left,int32_t right);
 

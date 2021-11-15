@@ -74,7 +74,7 @@ class VNTRAnnotator
     void pick_top_candidates(std::vector<candidate_fuzzy_motif>& candidate_model, int32_t mode);
 
     /**
-     * Try to find VNTR signatures.
+     * Find VNTR signatures.
      */
     void find_repeat_unit(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru);
     int32_t rl_find_repeat_unit(std::string& context, std::set<candidate_unit>& candidate_ru, bool flag=0);
@@ -82,14 +82,13 @@ class VNTRAnnotator
     int32_t if_homopoly(const char* chrom, int32_t left, int32_t right, char&b);
 
     /**
-     * Try to find the boundary of repeat region given a set of candidate RU
+     * Find the boundary of repeat region given a set of candidate RU
      */
      void find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru, std::vector<candidate_fuzzy_motif>& candidate_model);
 
     /**
      * Returns true if is to be classified as a VNTR
      */
-    bool is_vntr(Variant& variant, int32_t mode, std::string& method);
     bool is_vntr(candidate_fuzzy_motif& motif, int32_t mode);
 };
 

@@ -60,6 +60,7 @@ class Igor : Program
     std::string FLANKS;           // flank positions
     std::string FLANKSEQ;
     std::string VITERBI_SCORE;
+    std::string LONGESTMOSAIC;
 
     //helper variables for populating additional VNTR records
     uint32_t no_samples;
@@ -214,7 +215,8 @@ class Igor : Program
         CONCORDANCE = bcf_hdr_append_info_with_backup_naming(odw->hdr, "CONCORDANCE", ".", "Float", "Concordance of repeat unit.", false);
         RU_COUNTS = bcf_hdr_append_info_with_backup_naming(odw->hdr, "RU_COUNTS", ".", "Integer", "Number of exact repeat units and total number of repeat units.", false);
         FLANKS = bcf_hdr_append_info_with_backup_naming(odw->hdr, "FLANKS", "2", "Integer", "Left and right most position of the repeat region.", false);
-        FLANKSEQ = bcf_hdr_append_info_with_backup_naming(odw->hdr, "FLANKS", "1", "String", "Flanking sequence 10bp on either side of detected repeat region.", false);
+        FLANKSEQ = bcf_hdr_append_info_with_backup_naming(odw->hdr, "FLANKSEQ", "1", "String", "Flanking sequence 10bp on either side of detected repeat region.", false);
+        LONGESTMOSAIC = bcf_hdr_append_info_with_backup_naming(odw->hdr, "LONGESTMOSAIC", "1", "String", "Longest allele.", false);
 
         bcf_hdr_append(odw->hdr, "##INFO=<ID=LARGE_REPEAT_REGION,Number=0,Type=Flag,Description=\"Very large repeat region, vt only detects up to 1000bp long regions.\">");
 
@@ -281,6 +283,7 @@ class Igor : Program
      * Returns true if successful.
      */
     void insert_vntr_into_buffer(VNTR_candidate& vntr) {
+
         if (vntr.need_refit) {
             vntr.model_refit();
         }
@@ -290,7 +293,19 @@ class Igor : Program
         while (it != vntr_buffer.end()) {
             VNTR_candidate& cvntr = *it;
             int32_t merge_type = cvntr.merge(vntr);
-std::cerr << "Merge_type " << merge_type << '\t' << cvntr.st << ',' << cvntr.ed << '\n';
+if (debug && merge_type > 0) {
+    std::cerr << "Merge_type " << merge_type << '\n';
+}
+            if (it != vntr_buffer.begin() && cvntr.ed > std::prev(it)->ed) {
+                // End point of existing vntr changes, need to restore order
+                auto itt = vntr_buffer.begin();
+                auto tmp = std::next(it);
+                while (itt->ed > cvntr.ed && itt != vntr_buffer.end()) {
+                    itt++;
+                }
+                vntr_buffer.splice(itt, vntr_buffer, it);
+                it = std::prev(tmp);
+            }
             if(merge_type == 1) {
                 return;
             }
@@ -307,18 +322,10 @@ std::cerr << "Merge_type " << merge_type << '\t' << cvntr.st << ',' << cvntr.ed 
         }
         // If not merged, insert
         it = vntr_buffer.begin();
-        while (it != vntr_buffer.end()) {
-            VNTR_candidate& cvntr = *it;
-            if (cvntr.motif.ed < vntr.motif.ed) {
-                vntr_buffer.insert(it, vntr);
-if (debug) {
-printf("------------- insert_vntr_into_buffer: inserted new: st %d, ed %d, ru %s\n", vntr.motif.st, vntr.motif.ed, vntr.motif.ru.c_str());
-}
-                return;
-            }
+        while (it != vntr_buffer.end() && it->ed > vntr.ed) {
             it++;
         }
-        vntr_buffer.push_back(vntr);
+        vntr_buffer.insert(it, vntr);
 if (debug) {
 printf("------------- insert_vntr_into_buffer: inserted new: st %d, ed %d, ru %s\n", vntr.motif.st, vntr.motif.ed, vntr.motif.ru.c_str());
 }
@@ -328,37 +335,57 @@ printf("------------- insert_vntr_into_buffer: inserted new: st %d, ed %d, ru %s
     /**
      * Try to output old VNTR records
      */
-    void flush_vntr_buffer(bcf1_t* v) {
+    void flush_vntr_buffer(int32_t rid, int32_t pos) {
         // std::cerr << "Start output vntr\n";
         if (vntr_buffer.empty()) {
             return;
         }
-        int32_t rid = v->rid;
-        int32_t pos = v->pos;
+        // int32_t rid = v->rid;
+        // int32_t pos = v->pos;
         //search for vntr to start deleting from.
-        auto it = vntr_buffer.begin();
-        while(it != vntr_buffer.end()) {
-            VNTR_candidate& vntr = *it;
-            if (vntr.rid < rid) {
-                break;
-            } else if (vntr.rid == rid) {
-                if (vntr.motif.ed < pos-BUFFER_BP) {
-                    break;
-                }
-            } else {
+        auto it = vntr_buffer.end();
+        if (std::prev(it)->ed > pos-BUFFER_BP && std::prev(it)->rid == rid) {
+            return; // The most distance record is indispensible
+        }
+        while(it != vntr_buffer.begin()) {
+            VNTR_candidate& vntr = *std::prev(it);
+            if (vntr.rid > rid) {
                 //rid < vntr.rid is impossible
                 fprintf(stderr, "[%s:%d %s] flush_vntr_buffer - File %s is unordered\n", __FILE__, __LINE__, __FUNCTION__, input_vcf_file.c_str());
                 exit(1);
             }
-            ++it;
-        }
-        if (it!=vntr_buffer.end()) {
-            std::list<VNTR_candidate> torm(it, vntr_buffer.end());
-            torm.sort(); // Sort according to start point
-std::cerr << "flush_vntr_buffer before " << v->pos << '\t' << vntr_buffer.size() << '\t' << torm.size() << '\n';
-            for (auto &v : torm) {
-                write_vntr_to_vcf(v);
+            if (vntr.ed > pos-BUFFER_BP && vntr.rid == rid) {
+                break;
             }
+            --it;
+        }
+        std::list<VNTR_candidate> torm(it, vntr_buffer.end());
+        torm.sort(); // Sort according to start point
+if (debug) {
+    std::cerr << "------------- flush_vntr_buffer before " << pos-BUFFER_BP << '\t' << vntr_buffer.size() << '\t' << torm.size() << '\n';
+    for (auto &v : torm) {
+        printf("%d, %d, %s\n", v.st, v.ed, v.motif.ru.c_str());
+    }
+
+}
+        // Need to check if they could be further merged
+        auto pt = torm.begin();
+        while (pt != torm.end()) {
+            VNTR_candidate& vntr = *pt;
+            auto itt = std::next(pt);
+            bool merged = 0;
+            while (itt != torm.end()) {
+                VNTR_candidate& cvntr = *itt;
+                int32_t merge_type = cvntr.merge(vntr);
+                if (merge_type != 0) {
+                    break;
+                }
+                itt++;
+            }
+            if (!merged) { // Output as an independent record
+                write_vntr_to_vcf(vntr);
+            }
+            pt++;
         }
         while (it != vntr_buffer.end()) {
             it = vntr_buffer.erase(it);
@@ -366,14 +393,15 @@ std::cerr << "flush_vntr_buffer before " << v->pos << '\t' << vntr_buffer.size()
     }
 
     void flush_vntr_buffer() {
-std::cerr << "flush_vntr_buffer: " << vntr_buffer.size() << '\n';
-        vntr_buffer.sort();
-        auto it = vntr_buffer.begin();
-        while (it != vntr_buffer.end()) {
-            VNTR_candidate& vntr = *it;
-            write_vntr_to_vcf(vntr);
-            it = vntr_buffer.erase(it);
+        if (vntr_buffer.size() == 0) {
+            return;
         }
+if (debug) {
+    std::cerr << "------------- flush_vntr_buffer output entire buffer " << vntr_buffer.size() << "\n";
+}
+        int32_t r = vntr_buffer.front().rid;
+        int32_t p = vntr_buffer.front().ed + BUFFER_BP*10;
+        flush_vntr_buffer(r, p);
     }
 
     /**
@@ -393,7 +421,7 @@ std::cerr << "flush_vntr_buffer: " << vntr_buffer.size() << '\n';
         bcf_update_alleles_str(h, v, tname.c_str());
 
         std::stringstream ss;
-        ss << vntr.motif.ru << '.';
+        ss << vntr.motif.ru << ':';
         for (uint32_t i = 0; i < vntr.motif.mlen; ++i) {
             ss << vntr.motif.label[i];
         }
@@ -419,7 +447,11 @@ std::cerr << "flush_vntr_buffer: " << vntr_buffer.size() << '\n';
         bcf_update_info_int32(h, v, FLANKS.c_str(), &flks, 2);
 
         std::string flankseq = vntr.lflank + '[' + vntr.repeat_ref + ']' + vntr.rflank;
-        bcf_update_info_string(h, v, "FLANKSEQ", flankseq.c_str());
+        bcf_update_info_string(h, v, FLANKSEQ.c_str(), flankseq.c_str());
+
+        if (vntr.len_mrg > vntr.repeat_ref.length()) {
+        bcf_update_info_string(h, v, LONGESTMOSAIC.c_str(), vntr.query.substr(vntr.rel_st, vntr.len_mrg).c_str());
+        }
 
         // if (vntr.is_large_repeat) {
         //     bcf_update_info_flag(h, v, "LARGE_REPEAT_REGION", NULL, 1);
@@ -430,7 +462,7 @@ std::cerr << "flush_vntr_buffer: " << vntr_buffer.size() << '\n';
         odw->write(v);
         n_vntr_out++;
 
-std::cerr << "write_vntr_to_vcf: " << ss.str() << '\n';
+// std::cerr << "write_vntr_to_vcf: " << ss.str() << '\n';
 
     }
 
@@ -501,7 +533,7 @@ std::cerr << "write_vntr_to_vcf: " << ss.str() << '\n';
                     }
                 }
             }
-            flush_vntr_buffer(v);
+            flush_vntr_buffer(v->rid, v->pos);
         }
         flush_vntr_buffer();
         odw->close();
