@@ -1,7 +1,7 @@
 #ifndef WPHMM_UNGAP_H
 #define WPHMM_UNGAP_H
 
-#include "wphmm.h"
+#include "ru_profile.h"
 
 class WPHMM_UNGAP
 {

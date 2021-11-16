@@ -2,7 +2,7 @@
 
 WPHMM::WPHMM(const char* _s, const char* _m, bool _debug, bool* _b) {
     debug = _debug;
-    motif = new Motif_fuzzy_binary(_m);
+    motif = new Motif_fuzzy_binary(_m, Alphabet_size);
     motif->set_emission(.05); // Mismatch probability
     mlen = motif->mlen;
     int32_t n_inexact = 0;

@@ -191,11 +191,12 @@ void VNTRAnnotator::find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candida
             seq_segment& rr = wphmm->focal_rr;
             int32_t real_st = start0 + rr.p_st;
             int32_t real_ed = start0 + rr.p_ed;
+            int32_t l = rr.p_ed - rr.p_st + 1;
             if (indel_end - v->pos < focal_seq.size()) {
                 real_ed -= focal_seq.size();
             }
-            candidate_fuzzy_motif model(display_ru, inexact_label, real_st, real_ed, rr.nr, rr.score, rr.match_motif);
-            if (is_insertion) {
+            candidate_fuzzy_motif model(display_ru, inexact_label, real_st, real_ed, rr.nr, rr.score, l, rr.match_motif);
+            if (is_insertion) { // Decide if the inserted sequence is relevant (need to be explained by final model) to the TR.
                 if (wphmm->ru_complete[spiked_ed] - wphmm->ru_complete[spiked_st-1] > 1) {
                     model.insertion_relevant = 1;
                 }
@@ -311,9 +312,9 @@ int32_t VNTRAnnotator::rl_find_repeat_unit(std::string& context, std::set<candid
             added_ct++;
         }
     } else {
-        if (cseq.at(0) == cseq.at(cseq.size()-1)) {
-            cseq = cseq.substr(0, cseq.size()-1);
-        }
+        // if (cseq.at(0) == cseq.at(cseq.size()-1)) {
+        //     cseq = cseq.substr(0, cseq.size()-1);
+        // }
         if (cseq.size() > 2) {
             periodic_seq pseq_obj(cseq.c_str(), max_mlen, debug);
             if (flag) {
@@ -324,36 +325,56 @@ int32_t VNTRAnnotator::rl_find_repeat_unit(std::string& context, std::set<candid
             if (pseq_obj.candidate.size() > 0) {
                 for (const auto& s: pseq_obj.candidate) {
                     // Convert back from collapsed sequence signature
-                    candidate_unit tmp(s,1);
+                    if (s.length() == 1) {
+                        continue;
+                    }
                     size_t pt = cseq.find(s);
-                    std::vector<int32_t> omin(s.size(), cseq.size());
-                    std::vector<int32_t> omax(s.size(), 0);
                     if (pt == std::string::npos) {
                         continue;
                     }
+                    candidate_unit tmp(s,1);
+                    std::vector<std::map<int32_t, int32_t> > ovar(s.size());
                     while (pt != std::string::npos) {
                         for (size_t i = 0; i < s.size(); ++i) {
-                            omin[i] = std::min(omin[i], rl[pt+i]);
-                            omax[i] = std::max(omax[i], rl[pt+i]);
+                            if (ovar[i].find(rl[pt+i]) == ovar[i].end()) {
+                                ovar[i][rl[pt+i]] = 1;
+                            } else {
+                                ovar[i][rl[pt+i]] += 1;
+                            }
                         }
                         pt = cseq.find(s, pt+s.size());
                     }
                     std::string ss;
+                    bool flag = 1;
                     for (size_t i = 0; i < s.size(); ++i) {
-                        if (omin[i] == omax[i]) {
-                            for (int32_t j = 0; j < omin[i]; ++j) {
+                        auto it = std::prev(ovar[i].end());
+                        if (it->second == 1) {
+                            ovar[i].erase(it);
+                        } else if (ovar[i].begin()->second == 1) {
+                            ovar[i].erase(ovar[i].begin());
+                        } // At most erase one extreme value
+                        if (ovar[i].size() == 0) {
+                            flag = 0;
+                            break;
+                        }
+                        int32_t omin = ovar[i].begin()->first;
+                        int32_t omax = std::prev(ovar[i].end())->first;
+                        if (omin == omax) {
+                            for (int32_t j = 0; j < omin; ++j) {
                                 ss += s.at(i);
                                 tmp.variable_base.push_back(std::make_pair(1,1));
                             }
                         } else {
                             ss += s.at(i);
-                            tmp.variable_base.push_back(std::make_pair(omin[i], omax[i]));
+                            tmp.variable_base.push_back(std::make_pair(omin, omax));
                         }
                     }
-                    tmp.ru = ss;
-                    tmp.check();
-                    candidate_ru.insert(tmp);
-                    added_ct++;
+                    if (flag) {
+                        tmp.ru = ss;
+                        tmp.check();
+                        candidate_ru.insert(tmp);
+                        added_ct++;
+                    }
                 }
             }
         }

@@ -85,6 +85,7 @@ int32_t VNTR_candidate::merge(VNTR_candidate& rt) {
     if (rt.need_refit) {
         rt.model_refit();
     }
+    double cover = 0.85;
     candidate_fuzzy_motif& rhs = rt.motif;
     int32_t cp = motif.ru_compare(rhs);
     int32_t ovlp = intersect(rt);
@@ -92,27 +93,32 @@ int32_t VNTR_candidate::merge(VNTR_candidate& rt) {
     double f_ovlp = ((double) ovlp) / min_l;
 
     // Rule out immediate incompatible
-    if ((cp == 3 && f_ovlp < critical_ovlp) || -f_ovlp > max_interrupt) {
+    if ((cp >=2 && f_ovlp < critical_ovlp) || -f_ovlp > max_interrupt) {
         return 0;
     }
+
+    // if (cp == 2 && f_ovlp >= critical_ovlp) { // Inclusive & overlap
+    //     if (motif.ru.length() < rhs.ru.length()) {
+    //
+    //     } else {
+    //         alternative_models.push_back(rhs);
+    //         evaluate_models(alternative_models.size()-1);
+    //         if (alternative_models.back().viterbi_score < score_l*cover) {
+    //             alternative_models.pop_back();
+    //         }
+    //         return 0;
+    //         need_refit = (st > u_st || ed < u_ed);
+    //     }
+    //     st = u_st;
+    //     ed = u_ed;
+    //     return 2;
+    // }
 
     int32_t u_st = std::min(st, rhs.st);
     int32_t u_ed = std::max(ed, rhs.ed);
 if (debug) {
     printf( "--- VNTR_candidate::merge - %d, %d, %s_%d with query %d, %d, %s_%d. %d,%.2f --- \n", st,ed,motif.ru.c_str(),motif.inexact, rt.st,rt.ed,rt.motif.ru.c_str(),rt.motif.inexact,cp,f_ovlp );
 }
-
-    if (cp == 2 && f_ovlp >= critical_ovlp) { // Inclusive & overlap
-        if (motif.ru.length() < rhs.ru.length()) {
-            need_refit = (st > u_st || ed < u_ed);
-        } else {
-            alternative_models.push_back(rhs);
-            need_refit = 1;
-        }
-        st = u_st;
-        ed = u_ed;
-        return 1;
-    }
 
     // Rule out immediate mergeable (Type 1 merge)
     if (cp == 0 || (cp == 1 && f_ovlp >= critical_ovlp)) {
@@ -137,7 +143,6 @@ if (debug) {
     }
 
     // O.w. need to check if a model fits both segments well
-    double cover = 0.85;
     double m1r2 = rt.fit_alt_model(motif);
     if (m1r2 < rt.score_l*cover) { // Does not explain the additional region well
         return 0;
@@ -246,7 +251,7 @@ if (debug) {
     } else {
         score_r = score_l;
         n_ru_r = n_ru_l;
-        rlen_r = rlen_l; 
+        rlen_r = rlen_l;
     }
     int32_t seq_len;
     lflank = faidx_fetch_seq(fai, chrom, st-flk, st-1, &seq_len);
@@ -269,7 +274,7 @@ bool VNTR_candidate::choose_model() {
     }
     score_l = motif.viterbi_score;
     n_ru_l = motif.n_ru;
-    rlen_l = ed - st + 1;
+    rlen_l = motif.l;
     return 1;
 }
 
@@ -299,12 +304,14 @@ void VNTR_candidate::evaluate_models(uint32_t index) {
     if (wphmm->segments.size() == 0) { // Rare case
         mot.st = st;
         mot.ed = ed;
+        mot.l  = ed - st + 1;
         mot.n_ru = 0;
         mot.viterbi_score = 0;
     } else {
         seq_segment& rr = wphmm->focal_rr;
         mot.st = get_pos_in_ref(rr.p_st, rel_st);
         mot.ed = get_pos_in_ref(rr.p_ed, rel_st);
+        mot.l  = rr.p_ed - rr.p_st + 1;
         mot.n_ru = rr.nr; // n_ru in longest mosaic sequence
         mot.viterbi_score = rr.score;
     }

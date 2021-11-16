@@ -12,6 +12,7 @@
 #include <queue>
 #include <list>
 #include <algorithm>
+#include <iterator>
 #include "hts_utils.h"
 #include "htslib/kstring.h"
 #include "bcf_ordered_reader.h"
