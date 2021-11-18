@@ -35,14 +35,16 @@ class VNTR_candidate
     int32_t st, ed, mlen; // not equal to motif if multiple candidate models are merged
     int32_t rlen_r, n_ru_r; // info w.r.t. reference seq
     int32_t rlen_l, n_ru_l; // info w.r.t. longest mosaic sequence
+    int32_t rlen_r2, n_ru_r2;
     double score_r, score_l;
+    double score_r2, concordance_r, concordance_r2;
     const char* chrom;
     std::string repeat_ref;     // repeat region in ref
     std::string lflank;         // left flank
     std::string rflank;         // right flank
     std::list<std::pair<int32_t, std::string> > insertions; // maintain sorted
     // std::set<int32_t> inserted_pos;
-    int32_t rel_st, len_mrg;
+    int32_t rel_st, len_mrg, ins_tot;
     std::string query;
     // std::string merged_longest_rr; // could make this easier by keeping only the longest allele
     bool need_refit;

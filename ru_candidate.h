@@ -78,53 +78,91 @@ public:
     }
 
     /**
+    * If this inexact motif covers an exact one
+    */
+    bool explains(candidate_fuzzy_motif& rhs) {
+        if (!inexact || rhs.inexact) {
+            return 0;
+        }
+        if (mlen > rhs.mlen) {
+            return 0;
+        }
+        uint32_t i = 0, j = 0, pre_j = 0;
+        bool flag = 1;
+        while(i < rhs.mlen) {
+            if (j < mlen && rhs.ru[i] == ru[j]) {
+                pre_j = j;
+                i++;
+                j++;
+            } else if (label[pre_j] && rhs.ru[i] == ru[pre_j]) {
+                i++;
+            } else {
+                flag = 0;
+                break;
+            }
+        }
+        return flag;
+    }
+
+    /**
+    * If this motif includes rhs as an instance
+    * Or this motif consists of k copies of rhs, with k fractional but >= 1
+    */
+    bool contains(candidate_fuzzy_motif& rhs) {
+        if (inexact != rhs.inexact) {
+            return explains(rhs);
+        }
+        if (mlen == rhs.mlen) {
+            return ru == rhs.ru;
+        }
+        if (ru.find(rhs.ru)==std::string::npos) {
+            return 0;
+        }
+        std::string tmp = rhs.ru;
+        uint32_t i = 0;
+        while (tmp.length() < mlen) {
+            tmp += rhs.ru.at((i+rhs.mlen)%rhs.mlen);
+            i++;
+        }
+        return tmp == ru;
+    }
+
+    /**
      * If two repeat models are compatible.
      * 0 - Equivalent; 3 - Incompatible;
      * 1 - Compatible, non-inclusive;
      * 2 - Inclusive.
+     * 4 - Inclusive and redundant
      */
     int32_t ru_compare(candidate_fuzzy_motif& rhs) {
         if (ru == rhs.ru && label == rhs.label) {
             return 0; // Equivalent
         }
+        if (ru == rhs.ru) {
+            return 1;
+        }
         std::set<char> s1, s2;
         std::for_each(ru.begin(), ru.end(), [&s1] (char c) -> void { s1.insert(c);});
         std::for_each(rhs.ru.begin(), rhs.ru.end(), [&s2] (char c) -> void { s2.insert(c);});
-        if (s1 != s2) {
+        if (s1 != s2) { // differnet base composition
             return 3;
         }
-        if (ru.length() != rhs.ru.length()) {
-            // Check if one includes the other
-            if (ru.find(rhs.ru)!=std::string::npos || rhs.ru.find(ru)!=std::string::npos) {
-                return 2;
+        uint32_t k1 = ru.length();
+        uint32_t k2 = rhs.ru.length();
+        if (inexact == rhs.inexact) {
+            // Because of canonical form, only need to check inclusion
+            if (k1 == k2) {
+                return 3;
             }
-            return 3; // Repeat unit incompatible
-        }
-        bool equal_seq = (ru == rhs.ru);
-        uint32_t phase = 1;
-        while (phase < mlen && (!equal_seq)) {
-            std::string cru = ru.substr(phase, mlen-phase)+ru.substr(0,phase);
-            if (cru == rhs.ru) {
-                equal_seq = 1;
-                break;
+            if (k1 < k2) {
+                return rhs.contains(*this) ? 4 : 3;
             }
-            phase++;
+            return contains(rhs) ? 4 : 3;
         }
-        if (!equal_seq) {
-            return 3; // Repeat unit incompatible
+        if (explains(rhs) || rhs.explains(*this)) {
+            return 1;
         }
-        bool equal_cir = 1;
-        for (int32_t i = 0; i < mlen; ++i) {
-            if (label[(i+phase)%mlen] != rhs.label[i]) {
-                equal_cir = 0;
-                break;
-            }
-        }
-        if (equal_cir) {
-            return 0; // Circular equivalent
-        }
-        // Compatible
-        return 1;
+        return 3;
     }
 };
 
@@ -137,6 +175,9 @@ struct candidate_unit {
         if (inexact && variable_base.size() != ru.size()) {
             inexact = 0;
             variable_base.clear();
+            return;
+        }
+        if (variable_base.size() == 0) {
             return;
         }
         int32_t ct = 0;
@@ -154,8 +195,71 @@ struct candidate_unit {
         } else {
             inexact = 1;
         }
-
     }
+
+    void reduce() {
+        if (ru.length() == 1) {
+            return;
+        }
+        if (!inexact) {
+            for (uint32_t k = 1; k <= ru.length()/2; ++k) {
+                std::string subunit = ru.substr(0,k);
+                uint32_t j = k;
+                bool flag = 1;
+                while(j < ru.length()) {
+                    if (j+k > ru.length()) {
+                        if (ru.substr(j) + ru.substr(0, j+k-ru.length()) != subunit) {
+                            flag = 0;
+                            break;
+                        }
+                    } else if (ru.substr(j, k) != subunit) {
+                        flag = 0;
+                        break;
+                    }
+                    j += k;
+                }
+                if (flag) {
+                    ru = subunit;
+                    break;
+                }
+            }
+            return;
+        }
+        if (ru.length() < 4) {
+            return;
+        }
+        // TODO: the inexact part needs rewrite
+        std::string vb;
+        for (uint32_t i = 0; i < ru.length(); ++i) {
+            if (variable_base[i].first == variable_base[i].second) {
+                vb += '0';
+            } else {
+                vb += '1';
+            }
+        }
+        for (uint32_t k = 2; k <= ru.length()/2; ++k) {
+            if (ru.length() % k == 0) {
+                std::string subunit = ru.substr(0,k);
+                std::string subvarb = vb.substr(0,k);
+                uint32_t j = k;
+                bool flag = 1;
+                while(j < ru.length()) {
+                    if (ru.substr(j, k) != subunit || vb.substr(j, k) != subvarb) {
+                        flag = 0;
+                        break;
+                    }
+                    j += k;
+                }
+                if (flag) {
+                    ru = subunit;
+                    variable_base = std::vector< std::pair<int32_t, int32_t> >(variable_base.begin(), variable_base.begin()+k);
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
     bool operator<(const candidate_unit & rhs) const {
         if (inexact != rhs.inexact) {
             return (inexact < rhs.inexact);

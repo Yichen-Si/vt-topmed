@@ -361,8 +361,8 @@ void WPHMM::detect_range() {
     int32_t pre_state  = -1; // 1 if seq[i-2] is inside a M/I/D segment, 0 o.w.
     uint32_t offset = 10;
     int32_t i = L; // points to 1-based position in seq
-    int32_t j = viterbi_path.size()-1; // points to the state corresponds to seq[i-1]
-    uint32_t next_state = viterbi_path[j];
+    int32_t j = vpath.size()-1; // points to the state corresponds to seq[i-1]
+    uint32_t next_state = vpath[j];
     uint32_t pre_pos0 = L;
     while (i > 0) {
         uint32_t ptype = next_state;
@@ -371,7 +371,7 @@ void WPHMM::detect_range() {
             ptype = offset + (next_state-n_structure_state)/mlen;
             k = (next_state-n_structure_state) % mlen;
         }
-        // seq[i-1] is at viterbi_path[j]
+        // seq[i-1] is at vpath[j]
         uint32_t pos0 = i - 1;
         if (pre_state < 0 && k >= 0) {
             // First matching segment
@@ -408,7 +408,7 @@ void WPHMM::detect_range() {
             i -= 1; // only need to move the pointer in seq in state != D
         }
         j -= 1;
-        next_state = viterbi_path[j];
+        next_state = vpath[j];
     }
     if (pre_state == 1) {
         // Ending last M segment

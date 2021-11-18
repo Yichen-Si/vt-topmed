@@ -304,7 +304,7 @@ if (debug && merge_type > 0) {
         }
         vntr_buffer.insert(it, vntr);
 if (debug) {
-printf("------------- insert_vntr_into_buffer: inserted new: st %d, ed %d, ru %s\n", vntr.motif.st, vntr.motif.ed, vntr.motif.ru.c_str());
+printf("------------- insert_vntr_into_buffer: inserted new: st %d, ed %d, ru %s, score %.3f, contains insertion %lu\n", vntr.motif.st, vntr.motif.ed, vntr.motif.ru.c_str(), vntr.score_l, vntr.insertions.size());
 }
 
     }
@@ -313,12 +313,9 @@ printf("------------- insert_vntr_into_buffer: inserted new: st %d, ed %d, ru %s
      * Try to output old VNTR records
      */
     void flush_vntr_buffer(int32_t rid, int32_t pos) {
-        // std::cerr << "Start output vntr\n";
         if (vntr_buffer.empty()) {
             return;
         }
-        // int32_t rid = v->rid;
-        // int32_t pos = v->pos;
         //search for vntr to start deleting from.
         auto it = vntr_buffer.end();
         if (std::prev(it)->ed > pos-BUFFER_BP && std::prev(it)->rid == rid) {
@@ -343,7 +340,6 @@ if (debug) {
     for (auto &v : torm) {
         printf("%d, %d, %s\n", v.st, v.ed, v.motif.ru.c_str());
     }
-
 }
         // Need to check if they could be further merged
         auto pt = torm.begin();
@@ -397,12 +393,19 @@ if (debug) {
         std::string tname = vntr.repeat_ref + ",<VNTR>";
         bcf_update_alleles_str(h, v, tname.c_str());
 
+        bool dual = vntr.alternative_models.size() > 1;
         std::stringstream ss;
         ss << vntr.motif.ru << ':';
         for (uint32_t i = 0; i < vntr.motif.mlen; ++i) {
             ss << vntr.motif.label[i];
         }
         std::string ru_id = ss.str();
+        if (dual) {
+            ss << ',' << vntr.alternative_models[1].ru << ':';
+            for (uint32_t i = 0; i < vntr.alternative_models[1].mlen; ++i) {
+                ss << vntr.alternative_models[1].label[i];
+            }
+        }
         bcf_update_info_string(h, v, RU.c_str(), ss.str().c_str());
 
         std::string chrom(vntr.chrom);
@@ -411,14 +414,32 @@ if (debug) {
         ss << chrom << ':' << vntr.st << ':' << vntr.ed << ':' << ru_id;
         bcf_update_info_string(h, v, TR.c_str(), ss.str().c_str());
 
-        int32_t rlen[2] = {vntr.rlen_r, vntr.rlen_l};
-        bcf_update_info_int32(h, v, RL.c_str(), &rlen, 2);
+        if (dual) {
+            int32_t rlen[4] = {vntr.rlen_r, vntr.rlen_l,
+                vntr.rlen_r2, vntr.alternative_models[1].l};
+            bcf_update_info_int32(h, v, RL.c_str(), &rlen, 4);
+        } else {
+            int32_t rlen[2] = {vntr.rlen_r, vntr.rlen_l};
+            bcf_update_info_int32(h, v, RL.c_str(), &rlen, 2);
+        }
 
-        int32_t ru_count[2] = {vntr.n_ru_r, vntr.n_ru_l};
-        bcf_update_info_int32(h, v, RU_COUNTS.c_str(), &ru_count, 2);
+        if (dual) {
+            int32_t ru_count[4] = {vntr.n_ru_r, vntr.n_ru_l,
+                vntr.n_ru_r2, vntr.alternative_models[1].n_ru};
+            bcf_update_info_int32(h, v, RU_COUNTS.c_str(), &ru_count, 4);
+        } else {
+            int32_t ru_count[2] = {vntr.n_ru_r, vntr.n_ru_l};
+            bcf_update_info_int32(h, v, RU_COUNTS.c_str(), &ru_count, 2);
+        }
 
-        float scores[2] = {(float) vntr.score_r, (float) vntr.score_l};
-        bcf_update_info_float(h, v, VITERBI_SCORE.c_str(), &scores, 2);
+        if (dual) {
+            float scores[4] = {(float) vntr.score_r, (float) vntr.score_l,
+                (float) vntr.score_r2, (float) vntr.alternative_models[1].viterbi_score};
+            bcf_update_info_float(h, v, VITERBI_SCORE.c_str(), &scores, 2);
+        } else {
+            float scores[2] = {(float) vntr.score_r, (float) vntr.score_l};
+            bcf_update_info_float(h, v, VITERBI_SCORE.c_str(), &scores, 2);
+        }
 
         int32_t flks[2] = {vntr.st, vntr.ed};
         bcf_update_info_int32(h, v, FLANKS.c_str(), &flks, 2);
@@ -438,9 +459,6 @@ if (debug) {
         bcf_update_genotypes(h, v, gts, no_samples);
         odw->write(v);
         n_vntr_out++;
-
-// std::cerr << "write_vntr_to_vcf: " << ss.str() << '\n';
-
     }
 
     bool has_filter(bcf1_t* v) {
@@ -471,33 +489,32 @@ if (debug) {
             bcf_unpack(v, BCF_UN_STR);
             if (!has_filter(v)) {continue;}
 
-            // // Normalize
-            // if (!vm->is_normalized(v)) {
-            //     uint32_t pos1 = bcf_get_pos1(v);
-            //     std::vector<std::string> alleles;
-            //     for (size_t i=0; i<bcf_get_n_allele(v); ++i) {
-            //         char *s = bcf_get_alt(v, i);
-            //         while (*s) {
-            //             *s = toupper(*s);
-            //             ++s;
-            //         }
-            //         alleles.push_back(std::string(bcf_get_alt(v, i)));
-            //     }
-            //     uint32_t left_extended = 0, left_trimmed = 0, right_trimmed = 0;
-            //     vm->right_trim_or_left_extend(alleles, pos1, bcf_get_chrom(h, v), left_extended, right_trimmed);
-            //     vm->left_trim(alleles, pos1, left_trimmed);
-            //     if (left_trimmed || left_extended || right_trimmed) {
-            //         kstring_t new_alleles = {0,0,0};
-            //         bcf_set_pos1(v, pos1);
-            //         new_alleles.l = 0;
-            //         for (size_t i=0; i<alleles.size(); ++i) {
-            //             if (i) kputc(',', &new_alleles);
-            //             kputs(alleles[i].c_str(), &new_alleles);
-            //         }
-            //         bcf_update_alleles_str(odw->hdr, v, new_alleles.s);
-            //     }
-            // }
-            // int32_t vtype = vm->classify_variant(odr->hdr, v, variant);
+            // Normalize
+            if (!vm->is_normalized(v)) {
+                uint32_t pos1 = bcf_get_pos1(v);
+                std::vector<std::string> alleles;
+                for (size_t i=0; i<bcf_get_n_allele(v); ++i) {
+                    char *s = bcf_get_alt(v, i);
+                    while (*s) {
+                        *s = toupper(*s);
+                        ++s;
+                    }
+                    alleles.push_back(std::string(bcf_get_alt(v, i)));
+                }
+                uint32_t left_extended = 0, left_trimmed = 0, right_trimmed = 0;
+                vm->right_trim_or_left_extend(alleles, pos1, bcf_get_chrom(h, v), left_extended, right_trimmed);
+                vm->left_trim(alleles, pos1, left_trimmed);
+                if (left_trimmed || left_extended || right_trimmed) {
+                    kstring_t new_alleles = {0,0,0};
+                    bcf_set_pos1(v, pos1);
+                    new_alleles.l = 0;
+                    for (size_t i=0; i<alleles.size(); ++i) {
+                        if (i) kputc(',', &new_alleles);
+                        kputs(alleles[i].c_str(), &new_alleles);
+                    }
+                    bcf_update_alleles_str(odw->hdr, v, new_alleles.s);
+                }
+            }
 
             if (bcf_get_variant_types(v) == VCF_INDEL) {
                 n_indels++;

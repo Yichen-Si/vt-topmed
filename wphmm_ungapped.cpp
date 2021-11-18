@@ -259,30 +259,28 @@ bool WPHMM_UNGAP::count_ru() {
         }
         return 0;
     }
-    // find anchor
-    int32_t acr = 0, racr = 0;
-    while (motif->if_soft[acr] && acr < mlen) {
-        acr++;
-    }
-    racr = mlen-1;
-    while (racr > acr && motif->if_soft[racr]) {
-        racr--;
-    }
-    if (acr >= mlen || racr <= acr) {
-        fprintf(stderr, "[%s:%d %s] Motif is ill defined, cannot find anchor %s, %s.\n", __FILE__, __LINE__, __FUNCTION__,motif->base, ru.c_str());
-        exit(1);
-    }
     uint32_t i = 0; // points to position in vpath
     uint32_t j = 0; // points to position in seq
-    while (i<vpath.size() && vpath[i] != n_structure_state+acr) {
-        if (vpath[i] < n_structure_state+mlen*2) { // Not deletion
-            ru_complete[j] = 0;
-            j++;
-        }
+    while (i<vpath.size() && vpath[i] < n_structure_state) {
+        ru_complete[j] = 0;
+        j++;
         i++;
     }
     if (i==vpath.size()) {
         return 1;
+    }
+    int32_t acr = vpath[i]-n_structure_state;
+    if (motif->if_soft[acr]) {
+        acr--;
+    }
+    int32_t racr = (acr+1) % mlen;
+    while (motif->if_soft[racr]) {
+        racr = (racr+1) % mlen;
+    }
+    if (vpath[i] >= n_structure_state+mlen || motif->if_soft[acr] || racr==acr) {
+        fprintf(stderr, "[%s:%d %s] Motif is ill defined, cannot find anchor %s, %s; %d, %d; %d, %d.\n", __FILE__, __LINE__, __FUNCTION__,motif->base, ru.c_str(), acr, racr, i, j);
+        std::cerr << print_viterbi_path() << '\n';
+        exit(1);
     }
     bool pre_state = 0;
     if (j == 0) { // The first base is in M
@@ -330,12 +328,12 @@ void WPHMM_UNGAP::detect_range() {
         }
     }
     int32_t s_ed = -1, s_st = -1;
-    int32_t n_ru = 0;
+    int32_t n_ru = 0, n_ins = 0;
     int32_t pre_state = -1;
     uint32_t offset = 10;
     int32_t i = L;
-    int32_t j = viterbi_path.size()-1;
-    uint32_t next_state = viterbi_path[j];
+    int32_t j = vpath.size()-1;
+    uint32_t next_state = vpath[j];
     uint32_t pre_pos0 = L;
     while (i > 0) {
         uint32_t ptype = next_state;
@@ -349,27 +347,31 @@ void WPHMM_UNGAP::detect_range() {
             // Starting a matching segment
             s_ed = pos0;
             pre_state = 1;
+            n_ins = (ptype == offset+1);
         } else if (pre_state == 1 && ptype == N) {
             // Ending a M segment
             s_st = pre_pos0;
             n_ru = ru_complete[s_ed]-ru_complete[s_st];
-            seq_segment seg(s_st, s_ed, n_ru, 1);
+            seq_segment seg(s_st, s_ed, n_ru, s_ed-s_st+1-n_ins);
             seg.score = vmle[s_ed] - vmle[s_st-1] - (s_ed - s_st) * tmm;
             segments.push_back(seg);
             pre_state = 0;
+            n_ins = 0;
+        } else if (pre_state == 1 && ptype == offset+1) {
+            n_ins++;
         }
         pre_pos0 = pos0;
         if (ptype != offset + 2) {
             i -= 1;
         }
         j -= 1;
-        next_state = viterbi_path[j];
+        next_state = vpath[j];
     }
     if (pre_state == 1) {
         // Ending last M segment
         s_st = 0;
         n_ru = ru_complete[s_ed]-ru_complete[s_st];
-        seq_segment seg(s_st, s_ed, n_ru, 1);
+        seq_segment seg(s_st, s_ed, n_ru, s_ed-s_st+1-n_ins);
         seg.score = vmle[s_ed] - (s_ed - s_st) * tmm;
         segments.push_back(seg);
     }
