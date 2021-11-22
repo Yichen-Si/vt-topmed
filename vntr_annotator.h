@@ -19,11 +19,11 @@
 #include "bcf_ordered_writer.h"
 #include "program.h"
 
-#include "variant_manip.h"
 #include "vntr_candidate.h"
 #include "seq_ipdft.h"
 #include "wphmm.h"
 #include "wphmm_ungapped.h"
+#include "shift_align.h"
 
 //definition of STRs
 #define VITERBI_VNTR       0
@@ -54,7 +54,6 @@ class VNTRAnnotator
 
     // tools
     faidx_t* fai;
-    VariantManip *vm;
 
     VNTRAnnotator(std::string& ref_fasta_file, bool _debug=false, uint32_t _m = 16);
     ~VNTRAnnotator();
@@ -86,6 +85,7 @@ class VNTRAnnotator
      * Find the boundary of repeat region given a set of candidate RU
      */
      void find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru, std::vector<candidate_fuzzy_motif>& candidate_model);
+     void find_homopoly_region(std::string& query, char b, int32_t& st, int32_t& ed, int32_t& nr);
 
     /**
      * Returns true if is to be classified as a VNTR

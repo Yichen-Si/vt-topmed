@@ -238,7 +238,7 @@ class Igor : Program
         std::clog << "         [o] output VCF file          " << output_vcf_file << "\n";
         std::clog << "         [m] method of VNTR detection " << method << "\n";
         std::clog << "         [a] mode of annotation       " << annotation_mode << "\n";
-        std::clog << "         [k] max repeat unit length   " << max_mlen << "\n";
+        std::clog << "         [n] max repeat unit length   " << max_mlen << "\n";
         print_boo_op("         [d] debug                    ", debug);
         print_ref_op("         [r] ref FASTA file           ", ref_fasta_file);
         print_boo_op("         [x] override tag             ", override_tag);
@@ -250,7 +250,7 @@ class Igor : Program
     {
         std::clog << "\n";
         std::cerr << "Number of indels                     " << n_indels   << "\n";
-        std::cerr << "Number of indels identified as vntr  " << n_vntr     << "\n";
+        std::cerr << "Number of indels overlapped with vntr  " << n_vntr     << "\n";
         std::cerr << "Number of (merged) vntr output       " << n_vntr_out << "\n";
         std::clog << "\n";
     }
@@ -351,11 +351,18 @@ if (debug) {
                 VNTR_candidate& cvntr = *itt;
                 int32_t merge_type = cvntr.merge(vntr);
                 if (merge_type != 0) {
+if (debug) {
+    std::cerr << "flush_vntr_buffer merge " << vntr.st << ',' << vntr.ed << ',' << vntr.motif.ru << '\t';
+    std::cerr << cvntr.st << ',' << cvntr.ed << ',' << cvntr.motif.ru << '\n';
+}
                     break;
                 }
                 itt++;
             }
             if (!merged) { // Output as an independent record
+if (debug) {
+    std::cerr << "flush_vntr_buffer " << vntr.st << '\t' << vntr.ed << '\t' << vntr.motif.ru << '\n';
+}
                 write_vntr_to_vcf(vntr);
             }
             pt++;
@@ -384,8 +391,23 @@ if (debug) {
 
         bcf_hdr_t* h = odw->hdr;
         if (!vntr.finalize()) {
+if (debug) {
+    std::cerr << "write_vntr_to_vcf finalize failed\n";
+}
             return;
         }
+
+        bool final_pass = 0;
+        for (auto &v : vntr.alternative_models) {
+            final_pass = final_pass || va->is_vntr(v, vntr_classification);
+        }
+        if (!final_pass) {
+if (debug) {
+    std::cerr << "write_vntr_to_vcf VNTR criteria failed. " << vntr.motif.ru << '\t' << vntr.motif.st << ',' << vntr.motif.ed << '\t' << vntr.motif.inexact << '\t' << vntr.motif.viterbi_score << '\t' << vntr.motif.concordance << '\n';
+}
+            return;
+        }
+
         bcf1_t* v = bcf_init1();
         v->rid = vntr.rid;
         v->pos = vntr.st;
@@ -411,7 +433,7 @@ if (debug) {
         std::string chrom(vntr.chrom);
         ss.clear();
         ss.str("");
-        ss << chrom << ':' << vntr.st << ':' << vntr.ed << ':' << ru_id;
+        ss << chrom << ':' << vntr.st << ':' << vntr.ed << ':' << vntr.motif.ru;
         bcf_update_info_string(h, v, TR.c_str(), ss.str().c_str());
 
         if (dual) {
@@ -432,13 +454,25 @@ if (debug) {
             bcf_update_info_int32(h, v, RU_COUNTS.c_str(), &ru_count, 2);
         }
 
+        // if (dual) {
+        //     float scores[4] = {(float) vntr.concordance_r,
+        //         (float) vntr.motif.concordance,
+        //         (float) vntr.concordance_r2,
+        //         (float) vntr.alternative_models[1].concordance};
+        //     bcf_update_info_float(h, v, CONCORDANCE.c_str(), &scores, 4);
+        // } else {
+        //     float scores[2] = {(float) vntr.concordance_r,
+        //         (float) vntr.motif.concordance};
+        //     bcf_update_info_float(h, v, CONCORDANCE.c_str(), &scores, 2);
+        // }
+
         if (dual) {
-            float scores[4] = {(float) vntr.score_r, (float) vntr.score_l,
+            float cscores[4] = {(float) vntr.score_r, (float) vntr.score_l,
                 (float) vntr.score_r2, (float) vntr.alternative_models[1].viterbi_score};
-            bcf_update_info_float(h, v, VITERBI_SCORE.c_str(), &scores, 2);
+            bcf_update_info_float(h, v, VITERBI_SCORE.c_str(), &cscores, 4);
         } else {
-            float scores[2] = {(float) vntr.score_r, (float) vntr.score_l};
-            bcf_update_info_float(h, v, VITERBI_SCORE.c_str(), &scores, 2);
+            float cscores[2] = {(float) vntr.score_r, (float) vntr.score_l};
+            bcf_update_info_float(h, v, VITERBI_SCORE.c_str(), &cscores, 2);
         }
 
         int32_t flks[2] = {vntr.st, vntr.ed};
@@ -519,7 +553,7 @@ if (debug) {
             if (bcf_get_variant_types(v) == VCF_INDEL) {
                 n_indels++;
                 std::vector<candidate_fuzzy_motif> candidate_model;
-                if (va->annotate(odr->hdr, v, candidate_model) > 0) {
+                if (va->annotate(odr->hdr, v, candidate_model, vntr_classification) > 0) {
                     n_vntr++;
                     for (auto & vntr_model : candidate_model) {
                         VNTR_candidate vntr(fai, odr->hdr, v, vntr_model, debug);

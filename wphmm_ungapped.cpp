@@ -25,12 +25,12 @@ WPHMM_UNGAP::WPHMM_UNGAP(const char* _s, const char* _m, bool _debug, bool* _b, 
     seq = (char*) malloc(sizeof(char) * L);
     memcpy(seq, _s, L);
     delta_B = log2(1./mlen); // B -> M, uniform
-    delta_E = log2(.1); // M -> E, uniform
+    delta_E = log2(.15); // M -> E, uniform
     lambda = log2(.1); // insertion openning
     gamma  = log2(.2); // insertion elongation
     eta    = log2(.1); // deletion openning
     zeta   = log2(.2); // deletion elongation
-    tmm = log2(.7); // minus probability of indel or end
+    tmm = log2(.65); // minus probability of indel or end
     tdm = log2(.8);
     tim = log2(.8);
     trr = L / (L + 3.);
@@ -347,7 +347,7 @@ void WPHMM_UNGAP::detect_range() {
             // Starting a matching segment
             s_ed = pos0;
             pre_state = 1;
-            n_ins = (ptype == offset+1);
+            n_ins = (ptype > offset);
         } else if (pre_state == 1 && ptype == N) {
             // Ending a M segment
             s_st = pre_pos0;
@@ -357,7 +357,7 @@ void WPHMM_UNGAP::detect_range() {
             segments.push_back(seg);
             pre_state = 0;
             n_ins = 0;
-        } else if (pre_state == 1 && ptype == offset+1) {
+        } else if (pre_state == 1 && ptype > offset) {
             n_ins++;
         }
         pre_pos0 = pos0;

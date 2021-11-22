@@ -34,12 +34,12 @@ WPHMM::WPHMM(const char* _s, const char* _m, bool _debug, bool* _b) {
     seq = (char*) malloc(sizeof(char) * (L+1));
     memcpy(seq, _s, L);
     delta_B = log2(1./mlen); // B -> M, uniform
-    delta_E = log2(.1); // M -> E, uniform
+    delta_E = log2(.15); // M -> E, uniform
     lambda = log2(.1); // insertion openning
     gamma  = log2(.2); // insertion elongation
     eta    = log2(.1); // deletion openning
     zeta   = log2(.2); // deletion elongation
-    tmm = log2(.7); // minus probability of indel or end
+    tmm = log2(.65); // minus probability of indel or end
     tdm = log2(.8);
     tim = log2(.8);
     trr = L / (L + 3.);
@@ -387,7 +387,7 @@ void WPHMM::detect_range() {
             // Starting a M segment
             s_ed = pos0;
             pre_state = 1;
-            n_ins = (ptype == offset+1);
+            n_ins = (ptype > offset);
         } else if (pre_state == 1 && (ptype == J || ptype == N)) {
             // Ending a M segment
             s_st = pre_pos0;
@@ -400,7 +400,7 @@ void WPHMM::detect_range() {
             s_ed = pos0;
             pre_state = 0;
             n_ins = 0;
-        } else if (pre_state == 1 && ptype == offset+1) {
+        } else if (pre_state == 1 && ptype > offset) {
             n_ins++;
         }
         pre_pos0 = pos0;
@@ -421,10 +421,7 @@ void WPHMM::detect_range() {
 }
 
 /**
-    Pick one focal repeat region (that overlapps with the input interval)
-    Identify the rest as flanking region
-    (LATER/MAYBE: if the probabilistic model is not reliable, may need to merge
-    short junctions and perform a final non-gapped fit)
+    Pick focal repeat region (that overlapps with the input interval)
 */
 int32_t WPHMM::select_segment(int32_t left,int32_t right) {
     if (segments.size() == 0) {
@@ -433,8 +430,24 @@ int32_t WPHMM::select_segment(int32_t left,int32_t right) {
     std::vector<uint32_t> indx;
     for (uint32_t i = 0; i < segments.size(); ++i) {
         seq_segment& v = segments[i];
-        if (v.match_motif && (v.p_st <= right) && (v.p_ed >= left)) {
+        if (v.match_motif && (v.p_ed >= left) && (v.p_st <= right)) {
             indx.push_back(i);
+        }
+    }
+    if (indx.size() == 0) { // Take the closest one
+        for (uint32_t i = 0; i < segments.size(); ++i) {
+            seq_segment& v = segments[i];
+            if (v.match_motif && v.p_st > right) {
+                indx.push_back(i);
+                break;
+            }
+        }
+        for (int32_t i = segments.size()-1; i >= 0; --i) {
+            seq_segment& v = segments[i];
+            if (v.match_motif && v.p_ed < left) {
+                indx.push_back(i);
+                break;
+            }
         }
     }
     if (indx.size() == 0) {

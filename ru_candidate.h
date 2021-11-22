@@ -81,11 +81,22 @@ public:
     * If this inexact motif covers an exact one
     */
     bool explains(candidate_fuzzy_motif& rhs) {
-        if (!inexact || rhs.inexact) {
+        if (!inexact && rhs.inexact) {
             return 0;
         }
         if (mlen > rhs.mlen) {
             return 0;
+        }
+        if (inexact && rhs.inexact) {
+            if (ru != rhs.ru) {
+                return 0;
+            }
+            for (uint32_t i = 0; i < mlen; ++i) {
+                if (!label[i] && rhs.label[i]) {
+                    return 0;
+                }
+            }
+            return 1;
         }
         uint32_t i = 0, j = 0, pre_j = 0;
         bool flag = 1;
@@ -129,14 +140,18 @@ public:
 
     /**
      * If two repeat models are compatible.
-     * 0 - Equivalent; 3 - Incompatible;
-     * 1 - Compatible, non-inclusive;
-     * 2 - Inclusive.
-     * 4 - Inclusive and redundant
+     * -1 Incompatible
+     * 0  Equivalent
+     * 1  Compatible, non-inclusive
+     * 2  Inclusive
+     * 3  Inclusive and redundant
      */
     int32_t ru_compare(candidate_fuzzy_motif& rhs) {
         if (ru == rhs.ru && label == rhs.label) {
             return 0; // Equivalent
+        }
+        if (explains(rhs) || rhs.explains(*this)) {
+            return 2;
         }
         if (ru == rhs.ru) {
             return 1;
@@ -145,24 +160,17 @@ public:
         std::for_each(ru.begin(), ru.end(), [&s1] (char c) -> void { s1.insert(c);});
         std::for_each(rhs.ru.begin(), rhs.ru.end(), [&s2] (char c) -> void { s2.insert(c);});
         if (s1 != s2) { // differnet base composition
-            return 3;
+            return -1;
         }
         uint32_t k1 = ru.length();
         uint32_t k2 = rhs.ru.length();
         if (inexact == rhs.inexact) {
-            // Because of canonical form, only need to check inclusion
-            if (k1 == k2) {
-                return 3;
-            }
             if (k1 < k2) {
-                return rhs.contains(*this) ? 4 : 3;
+                return rhs.contains(*this) ? 3 : -1;
             }
-            return contains(rhs) ? 4 : 3;
+            return contains(rhs) ? 3 : -1;
         }
-        if (explains(rhs) || rhs.explains(*this)) {
-            return 1;
-        }
-        return 3;
+        return -1;
     }
 };
 
@@ -170,11 +178,13 @@ struct candidate_unit {
     std::string ru;
     bool inexact;
     std::vector< std::pair<int32_t, int32_t> > variable_base;
+    // std::vector<int32_t> mode;
     candidate_unit(std::string _s, bool _i = 0) : ru(_s), inexact(_i) {}
     void check() {
         if (inexact && variable_base.size() != ru.size()) {
             inexact = 0;
             variable_base.clear();
+            // mode.clear();
             return;
         }
         if (variable_base.size() == 0) {
@@ -192,6 +202,7 @@ struct candidate_unit {
         if (ct == 0) {
             inexact = 0;
             variable_base.clear();
+            // mode.clear();
         } else {
             inexact = 1;
         }
@@ -203,24 +214,35 @@ struct candidate_unit {
         }
         if (!inexact) {
             for (uint32_t k = 1; k <= ru.length()/2; ++k) {
-                std::string subunit = ru.substr(0,k);
-                uint32_t j = k;
-                bool flag = 1;
-                while(j < ru.length()) {
-                    if (j+k > ru.length()) {
-                        if (ru.substr(j) + ru.substr(0, j+k-ru.length()) != subunit) {
+                for (uint32_t offset = 0; offset < k; ++offset) {
+                    std::string subunit = ru.substr(offset,k);
+                    uint32_t j = offset + k;
+                    bool flag = 1;
+                    while(j < ru.length()) {
+                        if (j+k >= ru.length()) {
+                            if (ru.substr(j) + ru.substr(0, j+k-ru.length()) == subunit) {
+                                break;
+                            }
+                            uint32_t i = 0;
+                            while (j < ru.length() && ru.at(j) == subunit.at(i)) {
+                                j++;
+                                i++;
+                            }
+                            if (k > 1 && ru.length()-j < k && j >= k*2) {
+                                break;
+                            }
+                            flag = 0;
+                            break;
+                        } else if (ru.substr(j, k) != subunit) {
                             flag = 0;
                             break;
                         }
-                    } else if (ru.substr(j, k) != subunit) {
-                        flag = 0;
+                        j += k;
+                    }
+                    if (flag) {
+                        ru = subunit;
                         break;
                     }
-                    j += k;
-                }
-                if (flag) {
-                    ru = subunit;
-                    break;
                 }
             }
             return;

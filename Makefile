@@ -117,6 +117,7 @@ SOURCES = align\
 		Error\
 		wphmm\
 		wphmm_ungapped\
+		shift_align\
 		vntr_candidate\
 		identify_vntr\
 
