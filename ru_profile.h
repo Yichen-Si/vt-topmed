@@ -53,7 +53,7 @@ public:
     void set_emission(float _e) {
         for (int32_t i = 0; i < mlen; ++i) {
             mvec[i] = log2(1.-_e) + log2(alphabet_size);
-            emtx[i] = log2(_e/(alphabet_size-1)) + log2(alphabet_size);
+            emtx[i] = log2(_e/(alphabet_size-1.)) + log2(alphabet_size);
         }
     }
 };

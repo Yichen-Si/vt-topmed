@@ -22,7 +22,7 @@ class candidate_fuzzy_motif
 {
 public:
     uint32_t mlen;
-    std::string ru;
+    std::string ru, ru_org;
     std::vector<bool> label;
     bool inexact;
     int32_t st, ed; // zero based, inclusive. genome position of repeat region
@@ -33,6 +33,7 @@ public:
     std::string insertion;
 
     candidate_fuzzy_motif(std::string _u, std::vector<bool> _w, int32_t _s, int32_t _e, int32_t _n, double _v, int32_t _l = -1, int32_t _c = 0) : ru(_u), label(_w), st(_s), ed(_e), n_ru(_n), viterbi_score(_v), l(_l) {
+            ru_org = ru;
             mlen = ru.length();
             inexact = 0;
             for (uint32_t i = 0; i < mlen; ++i) {
@@ -48,6 +49,12 @@ public:
     candidate_fuzzy_motif() {}
 
     bool operator<(const candidate_fuzzy_motif & rhs) const {
+        if ((l >= rhs.l || n_ru >= rhs.n_ru) && concordance > rhs.concordance) {
+            return true;
+        }
+        if ((l <= rhs.l || n_ru <= rhs.n_ru) && concordance < rhs.concordance) {
+            return false;
+        }
         return (viterbi_score > rhs.viterbi_score);
     }
 
@@ -185,9 +192,12 @@ struct candidate_unit {
             inexact = 0;
             variable_base.clear();
             // mode.clear();
+            reduce();
             return;
         }
         if (variable_base.size() == 0) {
+            inexact = 0;
+            reduce();
             return;
         }
         int32_t ct = 0;
@@ -203,6 +213,7 @@ struct candidate_unit {
             inexact = 0;
             variable_base.clear();
             // mode.clear();
+            reduce();
         } else {
             inexact = 1;
         }
@@ -212,71 +223,54 @@ struct candidate_unit {
         if (ru.length() == 1) {
             return;
         }
-        if (!inexact) {
-            for (uint32_t k = 1; k <= ru.length()/2; ++k) {
-                for (uint32_t offset = 0; offset < k; ++offset) {
-                    std::string subunit = ru.substr(offset,k);
-                    uint32_t j = offset + k;
-                    bool flag = 1;
-                    while(j < ru.length()) {
-                        if (j+k >= ru.length()) {
-                            if (ru.substr(j) + ru.substr(0, j+k-ru.length()) == subunit) {
-                                break;
-                            }
-                            uint32_t i = 0;
-                            while (j < ru.length() && ru.at(j) == subunit.at(i)) {
-                                j++;
-                                i++;
-                            }
-                            if (k > 1 && ru.length()-j < k && j >= k*2) {
-                                break;
-                            }
-                            flag = 0;
-                            break;
-                        } else if (ru.substr(j, k) != subunit) {
-                            flag = 0;
-                            break;
-                        }
-                        j += k;
-                    }
-                    if (flag) {
-                        ru = subunit;
-                        break;
-                    }
-                }
+        if (inexact) {
+            return;
+        }
+        // TODO: this is inefficient, should use agrep
+        char b = ru.at(0);
+        bool flag = 1;
+        for (uint32_t k = 1; k < ru.length(); ++k) {
+            if (ru.at(k) != b) {
+                flag = 0;
             }
+        }
+        if (flag) {
+            ru = ru.substr(0, 1);
             return;
         }
         if (ru.length() < 4) {
             return;
         }
-        // TODO: the inexact part needs rewrite
-        std::string vb;
-        for (uint32_t i = 0; i < ru.length(); ++i) {
-            if (variable_base[i].first == variable_base[i].second) {
-                vb += '0';
-            } else {
-                vb += '1';
-            }
-        }
         for (uint32_t k = 2; k <= ru.length()/2; ++k) {
-            if (ru.length() % k == 0) {
-                std::string subunit = ru.substr(0,k);
-                std::string subvarb = vb.substr(0,k);
-                uint32_t j = k;
-                bool flag = 1;
-                while(j < ru.length()) {
-                    if (ru.substr(j, k) != subunit || vb.substr(j, k) != subvarb) {
-                        flag = 0;
+            std::string subunit = ru.substr(0,k);
+            uint32_t j = k;
+            bool flag = 1;
+            while(j < ru.length()) {
+                if (j >= k*2 && j+k > ru.length()) {
+                    uint32_t i = 0;
+                    while (j < ru.length() && ru.at(j) == subunit.at(i)) {
+                        j++;
+                        i++;
+                    }
+                    if (j == ru.length()) {
+                        i = (k-i < i) ? k-i : i;
+                    } else {
+                        i = k - i;
+                    }
+                    if (1.*i/ru.length() < 0.2) {
                         break;
                     }
-                    j += k;
+                    flag = 0;
+                    break;
+                } else if (ru.substr(j, k) != subunit) {
+                    flag = 0;
+                    break;
                 }
-                if (flag) {
-                    ru = subunit;
-                    variable_base = std::vector< std::pair<int32_t, int32_t> >(variable_base.begin(), variable_base.begin()+k);
-                    return;
-                }
+                j += k;
+            }
+            if (flag) {
+                ru = subunit;
+                break;
             }
         }
         return;

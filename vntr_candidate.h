@@ -18,7 +18,6 @@
 #include "wphmm_ungapped.h"
 #include "ru_candidate.h"
 
-
 /**
  * Class for representing a VNTR.
  * Hold information of multiple repeat models
@@ -69,7 +68,7 @@ class VNTR_candidate
     }
 
     void add_insertion(int32_t _p, std::string _s);
-    void combine_insertions();
+    void combine_insertions(int32_t pad = -1);
     int32_t get_pos_in_ref(int32_t p_rel, int32_t rel_st = 0);
 
     /**
@@ -89,9 +88,8 @@ class VNTR_candidate
 
     /**
      * Fit an alternative RU to the current sequence
-     * Return viterbi score
      */
-    double fit_alt_model(candidate_fuzzy_motif& rhs);
+    bool fit_alt_model(candidate_fuzzy_motif& rhs);
 
     /**
      * Fit ungapped local alignment model

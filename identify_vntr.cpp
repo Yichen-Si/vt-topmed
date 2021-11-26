@@ -361,7 +361,7 @@ if (debug) {
             }
             if (!merged) { // Output as an independent record
 if (debug) {
-    std::cerr << "flush_vntr_buffer " << vntr.st << '\t' << vntr.ed << '\t' << vntr.motif.ru << '\n';
+    std::cerr << "flush_vntr_buffer try to write to vcf " << vntr.st << '\t' << vntr.ed << '\t' << vntr.motif.ru << '\n';
 }
                 write_vntr_to_vcf(vntr);
             }
@@ -390,23 +390,38 @@ if (debug) {
     void write_vntr_to_vcf(VNTR_candidate& vntr) {
 
         bcf_hdr_t* h = odw->hdr;
-        if (!vntr.finalize()) {
-if (debug) {
-    std::cerr << "write_vntr_to_vcf finalize failed\n";
-}
-            return;
+        if (va->choose_models(vntr, vntr_classification) ) {
+            if (!vntr.finalize()) {
+                if (debug) {
+                    std::cerr << "write_vntr_to_vcf finalize failed\n";
+                }
+                return;
+            }
+        } else {
+            if (debug) {
+                std::cerr << "write_vntr_to_vcf VNTR criteria failed. " << vntr.motif.ru << '\t';
+                for (auto v : vntr.motif.label) {
+                    std::cerr << v;
+                }
+                std::cerr << '\t' << vntr.motif.st << ',' << vntr.motif.ed << '\t' << vntr.motif.inexact << '\t' << vntr.motif.viterbi_score << '\t' << vntr.motif.concordance << '\n';
+                std::cerr << vntr.query.substr(vntr.rel_st, vntr.len_mrg) << '\n';
+            }
         }
-
-        bool final_pass = 0;
-        for (auto &v : vntr.alternative_models) {
-            final_pass = final_pass || va->is_vntr(v, vntr_classification);
-        }
-        if (!final_pass) {
-if (debug) {
-    std::cerr << "write_vntr_to_vcf VNTR criteria failed. " << vntr.motif.ru << '\t' << vntr.motif.st << ',' << vntr.motif.ed << '\t' << vntr.motif.inexact << '\t' << vntr.motif.viterbi_score << '\t' << vntr.motif.concordance << '\n';
-}
-            return;
-        }
+//         bool final_pass = 0;
+//         for (auto &v : vntr.alternative_models) {
+//             final_pass = final_pass || va->is_vntr(v, vntr_classification);
+//         }
+//         if (!final_pass) {
+// if (debug) {
+//     std::cerr << "write_vntr_to_vcf VNTR criteria failed. " << vntr.motif.ru << '\t';
+//     for (auto v : vntr.motif.label) {
+//         std::cerr << v;
+//     }
+//     std::cerr << '\t' << vntr.motif.st << ',' << vntr.motif.ed << '\t' << vntr.motif.inexact << '\t' << vntr.motif.viterbi_score << '\t' << vntr.motif.concordance << '\n';
+//     std::cerr << vntr.query.substr(vntr.rel_st, vntr.len_mrg) << '\n';
+// }
+//             return;
+//         }
 
         bcf1_t* v = bcf_init1();
         v->rid = vntr.rid;
@@ -433,7 +448,7 @@ if (debug) {
         std::string chrom(vntr.chrom);
         ss.clear();
         ss.str("");
-        ss << chrom << ':' << vntr.st << ':' << vntr.ed << ':' << vntr.motif.ru;
+        ss << chrom << ':' << vntr.st << ':' << vntr.ed << ':' << vntr.motif.ru_org;
         bcf_update_info_string(h, v, TR.c_str(), ss.str().c_str());
 
         if (dual) {
@@ -454,17 +469,17 @@ if (debug) {
             bcf_update_info_int32(h, v, RU_COUNTS.c_str(), &ru_count, 2);
         }
 
-        // if (dual) {
-        //     float scores[4] = {(float) vntr.concordance_r,
-        //         (float) vntr.motif.concordance,
-        //         (float) vntr.concordance_r2,
-        //         (float) vntr.alternative_models[1].concordance};
-        //     bcf_update_info_float(h, v, CONCORDANCE.c_str(), &scores, 4);
-        // } else {
-        //     float scores[2] = {(float) vntr.concordance_r,
-        //         (float) vntr.motif.concordance};
-        //     bcf_update_info_float(h, v, CONCORDANCE.c_str(), &scores, 2);
-        // }
+        if (dual) {
+            float scores[4] = {(float) vntr.concordance_r,
+                (float) vntr.motif.concordance,
+                (float) vntr.concordance_r2,
+                (float) vntr.alternative_models[1].concordance};
+            bcf_update_info_float(h, v, CONCORDANCE.c_str(), &scores, 4);
+        } else {
+            float scores[2] = {(float) vntr.concordance_r,
+                (float) vntr.motif.concordance};
+            bcf_update_info_float(h, v, CONCORDANCE.c_str(), &scores, 2);
+        }
 
         if (dual) {
             float cscores[4] = {(float) vntr.score_r, (float) vntr.score_l,

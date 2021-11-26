@@ -87,6 +87,11 @@ class VNTRAnnotator
      void find_repeat_region(bcf_hdr_t* h, bcf1_t* v, std::set<candidate_unit>& candidate_ru, std::vector<candidate_fuzzy_motif>& candidate_model);
      void find_homopoly_region(std::string& query, char b, int32_t& st, int32_t& ed, int32_t& nr);
 
+     /**
+      * Choose top models for a vntr candidate regioin 
+      */
+     bool choose_models(VNTR_candidate& vntr, int32_t mode=VITERBI_VNTR);
+
     /**
      * Returns true if is to be classified as a VNTR
      */

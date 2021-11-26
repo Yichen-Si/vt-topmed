@@ -22,17 +22,21 @@ WPHMM_UNGAP::WPHMM_UNGAP(const char* _s, const char* _m, bool _debug, bool* _b, 
     for (uint32_t i = 0; i < state_list.size(); ++i) {
         state_label[i] = state_list[i];
     }
+    int32_t nf = 0;
+    for (uint32_t i = 0; i < mlen; ++i) {
+        nf += motif->if_soft[i];
+    }
     seq = (char*) malloc(sizeof(char) * L);
     memcpy(seq, _s, L);
-    delta_B = log2(1./mlen); // B -> M, uniform
-    delta_E = log2(.15); // M -> E, uniform
-    lambda = log2(.1); // insertion openning
-    gamma  = log2(.2); // insertion elongation
-    eta    = log2(.1); // deletion openning
-    zeta   = log2(.2); // deletion elongation
-    tmm = log2(.65); // minus probability of indel or end
-    tdm = log2(.8);
-    tim = log2(.8);
+    delta_B = log2(1./(mlen-nf)); // B -> M, uniform
+    delta_E = log2(.5); // M -> E, uniform
+    lambda = log2(.05); // insertion openning
+    gamma  = log2(.15); // insertion elongation
+    eta    = log2(.05); // deletion openning
+    zeta   = log2(.15); // deletion elongation
+    tmm = log2(.4); // minus probability of indel or end
+    tdm = log2(.85);
+    tim = log2(.85);
     trr = L / (L + 3.);
     tro = 1. - trr;
     trr = log2(trr);
@@ -102,6 +106,9 @@ void WPHMM_UNGAP::initialize() {
         I[0][k] = -DBL_MAX/2;
         D[0][k] = -DBL_MAX/2;
     }
+    for (int32_t k = 0; k < mlen; ++k) {
+        D[1][k] = -DBL_MAX/2;
+    }
 }
 
 void WPHMM_UNGAP::viterbi() {
@@ -115,14 +122,14 @@ void WPHMM_UNGAP::viterbi() {
             uint32_t k_1 = (k==0) ? mlen-1 : k-1; // wraparound index
             // Match
             std::vector<double> tmp(4);
-            tmp[0] = W[i][B] + delta_B;
+            tmp[0] = W[i][B] + ((motif->if_soft[k]) ? -DBL_MAX/2 : delta_B);
             tmp[2] = I[i-1][k_1] + tim;
             tmp[3] = D[i-1][k_1] + tdm;
             tmp[1] = M[i-1][k_1] + tmm;
             viterbi_mtx[i][n_structure_state+k] = viterbi_mtx[i][B]; // B->M(k)
             M[i][k] = tmp[0];
             for (uint32_t j = 1; j <= 3; ++j) {
-                if (tmp[j] >= M[i][k]) {
+                if (tmp[j] > M[i][k]) {
                     viterbi_mtx[i][n_structure_state+k] = n_structure_state+mlen*(j-1)+k_1; // M/I/D(k-1)->M(k)
                     M[i][k] = tmp[j];
                 }
@@ -147,25 +154,39 @@ void WPHMM_UNGAP::viterbi() {
                     I[i][k] = I[i-1][k] + gamma;
                 }
             }
-            // Deletion
-            if (motif->if_soft[k]) { // Tolerated deletion
-                if (D[i][k_1] + zeta > M[i][k_1]) {
-                    viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+mlen*2+k_1; // D(k-1)->D(k)
-                    D[i][k] = D[i][k_1];
-                } else {
-                    viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+k_1; // M(k-1)->D(k)
-                    D[i][k] = M[i][k_1];
-                }
-            } else { // Intolerated deletion
-                if (D[i][k_1] + zeta > M[i][k_1] + eta) {
-                    viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+mlen*2+k_1; // D(k-1)->D(k)
-                    D[i][k] = D[i][k_1] + zeta;
-                } else {
+        }
+
+        // Deletion (the inexact case is temporary)
+        if (i > 1) {
+            for (uint32_t k = 0; k < mlen; ++k) {
+                uint32_t k_1 = (k==0) ? mlen-1 : k-1; // wraparound index
+                if (k == 0) {
                     viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+k_1; // M(k-1)->D(k)
                     D[i][k] = M[i][k_1] + eta;
+                    if (motif->if_soft[k_1] && D[i][k] < M[i][k_1-1] + eta) {
+                        viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+k_1-1;
+                        D[i][k] = M[i][k_1-1] + eta;
+                    }
+                } else {
+                    if (motif->if_soft[k]) { // Tolerated deletion
+                        if (D[i][k_1] > M[i][k_1]) {
+                            viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+mlen*2+k_1; // D(k-1)->D(k)
+                            D[i][k] = D[i][k_1];
+                        } else {
+                            viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+k_1; // M(k-1)->D(k)
+                            D[i][k] = M[i][k_1];
+                        }
+                    } else { // Intolerated deletion
+                        if (D[i][k_1] + zeta > M[i][k_1] + eta) {
+                            viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+mlen*2+k_1; // D(k-1)->D(k)
+                            D[i][k] = D[i][k_1] + zeta;
+                        } else {
+                            viterbi_mtx[i][n_structure_state+mlen*2+k] = n_structure_state+k_1; // M(k-1)->D(k)
+                            D[i][k] = M[i][k_1] + eta;
+                        }
+                    }
                 }
             }
-            // D[i][k] = (M[i][k_1] > D[i][k_1]) ? M[i][k_1] : D[i][k_1];
         }
 
         W[i][N] = W[i-1][N] + trr;
@@ -200,10 +221,6 @@ void WPHMM_UNGAP::viterbi() {
     viterbi_score = W[L][C];
     viterbi_path.push_back(C); // Ends at C
     for (int32_t k = mlen-1; k >= 0; --k) {
-        // if (D[L][k] >= viterbi_score) {
-        //     viterbi_score = D[L][k];
-        //     viterbi_path[0] = n_structure_state+mlen*2+k;
-        // }
         if (I[L][k] >= viterbi_score) {
             viterbi_score = I[L][k];
             viterbi_path[0] = n_structure_state+mlen*1+k;
@@ -216,33 +233,34 @@ void WPHMM_UNGAP::viterbi() {
     vmle[L-1] = viterbi_score;
     viterbi_score -= L * log2((double)L/(L+1.)) - log2(1./(L+1.));
     vpath.push_back(viterbi_path.back());
+    uint32_t prev_state = viterbi_path.back();
     uint32_t i = L;
     while (i > 1) {
-        uint32_t next_state = viterbi_mtx[i][viterbi_path.back()];
+        uint32_t next_state = viterbi_mtx[i][prev_state];
         viterbi_path.push_back(next_state);
-        i -= 1;
+        if (prev_state < n_structure_state+mlen*2) {
+            i -= 1;
+        }
+        prev_state = next_state;
         if (next_state >= n_structure_state) {
             uint32_t ptype = (next_state-n_structure_state)/mlen;
             uint32_t k = (next_state-n_structure_state) % mlen;
-            switch (ptype) {
-                case 0: vmle[i-1] = M[i][k];
-                case 1: vmle[i-1] = I[i][k];
-                // case 2: vmle[i-1] = D[i][k];
+            if (ptype == 0) {
+                vmle[i-1] = M[i][k];
+            } else if (ptype == 1) {
+                vmle[i-1] = I[i][k];
             }
-            if (ptype == 2) {
-                i += 1;
-            }
-            if (motif->if_soft[k] && (ptype == 1)) { // Tolerated insertion, code as M
-                vpath.push_back(next_state-mlen);
+            if (motif->if_soft[k] && ptype == 2) { // Tolerated deletion
                 continue;
             }
-            if (motif->if_soft[k] && (ptype == 2)) { // Tolerated deletion
+            if (motif->if_soft[k] && ptype == 1 && seq[i-1] == motif->base[k]) { // Tolerated insertion, code as M
+                vpath.push_back(next_state-mlen);
                 continue;
             }
         } else {
             vmle[i-1] = W[i][next_state];
         }
-        vpath.push_back(viterbi_path.back());
+        vpath.push_back(next_state);
     }
     std::reverse(vpath.begin(), vpath.end());
     std::reverse(viterbi_path.begin(), viterbi_path.end());
@@ -269,15 +287,16 @@ bool WPHMM_UNGAP::count_ru() {
     if (i==vpath.size()) {
         return 1;
     }
-    int32_t acr = vpath[i]-n_structure_state;
+    // find anchor
+    int32_t acr = (vpath[i]-n_structure_state) % mlen;
     if (motif->if_soft[acr]) {
         acr--;
     }
-    int32_t racr = (acr+1) % mlen;
-    while (motif->if_soft[racr]) {
-        racr = (racr+1) % mlen;
+    int32_t racr = (mlen+acr-1) % mlen;
+    if (motif->if_soft[racr]) {
+        racr--;
     }
-    if (vpath[i] >= n_structure_state+mlen || motif->if_soft[acr] || racr==acr) {
+    if (vpath[i] >= n_structure_state+mlen || racr==acr) {
         fprintf(stderr, "[%s:%d %s] Motif is ill defined, cannot find anchor %s, %s; %d, %d; %d, %d.\n", __FILE__, __LINE__, __FUNCTION__,motif->base, ru.c_str(), acr, racr, i, j);
         std::cerr << print_viterbi_path() << '\n';
         exit(1);
@@ -289,22 +308,30 @@ bool WPHMM_UNGAP::count_ru() {
         i += 1;
         j += 1;
     }
-    while (i < vpath.size() && j < L) {
+    while (i < vpath.size()) {
         int32_t k = -1;
         int32_t ptype = vpath[i];
         if (vpath[i] >= n_structure_state) {
             k = (vpath[i] - n_structure_state) % mlen;
             ptype = (vpath[i] - n_structure_state) / mlen;
         }
-        if (k<0) {
+        if (k < 0) {
             pre_state = 0;
-        } else if (k==racr && ptype==0 && pre_state == 1) { // M[m-1], try to end a ru
-            ru_complete[j] = ru_complete[j-1] + 1;
-            pre_state = 0;
-        } else if (k==acr && ptype==0 && pre_state == 0) { // M[0], try to start a ru
-            pre_state = 1;
         } else if (pre_state == 1 && ptype != 0) { // I/D
             pre_state = 0;
+        } else if (pre_state == 1 && k == racr && ptype==0) { // M[m-1], a ru completed
+            ru_complete[j] = ru_complete[j-1] + 1;
+            pre_state = 0;
+        } else if (pre_state == 0 && ptype==0) { // M[0], try to start a ru
+            acr = k;
+            if (motif->if_soft[acr]) {
+                acr--;
+            }
+            racr = (mlen+acr-1) % mlen;
+            if (motif->if_soft[racr]) {
+                racr--;
+            }
+            pre_state = 1;
         }
         if (k>=0 && ptype==2) { // D
 
@@ -343,11 +370,11 @@ void WPHMM_UNGAP::detect_range() {
             k = (next_state-n_structure_state) % mlen;
         }
         uint32_t pos0 = i - 1;
-        if (pre_state < 0 && k >= 0) {
+        if (pre_state < 0 && ptype == offset) {
             // Starting a matching segment
             s_ed = pos0;
             pre_state = 1;
-            n_ins = (ptype > offset);
+            n_ins = 0;
         } else if (pre_state == 1 && ptype == N) {
             // Ending a M segment
             s_st = pre_pos0;

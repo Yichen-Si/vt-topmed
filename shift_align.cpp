@@ -5,7 +5,7 @@ ShiftAlign::ShiftAlign(faidx_t* _f, bcf_hdr_t* h, bcf1_t* v, int32_t _m, int32_t
     char** alleles = bcf_get_allele(v);
     extension = alleles[0];
     p_st = v->pos;
-    p_ed = v->pos + extension.size() - 1; // Last pos of deleted base
+    p_ed = v->pos + extension.size() - 1; // Last pos of deleted base or same as p_st
     if (strlen(alleles[1]) > extension.size()) {
         extension = alleles[1];
     }
@@ -18,6 +18,16 @@ ShiftAlign::ShiftAlign(faidx_t* _f, bcf_hdr_t* h, bcf1_t* v, int32_t _m, int32_t
     if (max_l < bound * 3) {
         max_l = bound * 3;
     }
+    if (max_l < s_st + bound) {
+        max_l = s_st + bound;
+    }
+    delta_exact = 0;
+}
+
+void ShiftAlign::set_parameter(float _m, float _s, float _g) {
+    s0 = _m;
+    s1 = _s;
+    g0 = _g;
 }
 
 void ShiftAlign::right_shift(int32_t &st0, int32_t &st, int32_t &ed, std::string& mseq) {
@@ -144,6 +154,21 @@ void ShiftAlign::shift(std::string& seq, int32_t& min_i, int32_t& min_j, int32_t
 //         std::cerr << '\n';
 //     }
 // }
+
+    if (H[s_st][s_st] >= s0*s_st) {
+        delta_exact = 1;
+    } else if (H[s_st+1][s_st] >= s0*s_st+g0) {
+        int32_t i = s_st+1;
+        int32_t j = s_st;
+        while (i > 0 && j > 0 && trace[i][j] == '1') {
+            i -= 1;
+            j -= 1;
+        }
+        if (j == 0) {
+            delta_exact = 1;
+        }
+    }
+
     // Backtrack
     min_i = 0;
     min_j = 0;

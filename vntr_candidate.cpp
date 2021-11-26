@@ -40,7 +40,7 @@ void VNTR_candidate::add_insertion(int32_t _p, std::string _s) {
     insertions.insert(it, std::make_pair(_p,_s));
 }
 
-void VNTR_candidate::combine_insertions() {
+void VNTR_candidate::combine_insertions(int32_t pad) {
 
     int32_t seq_len;
     repeat_ref = faidx_fetch_seq(fai, chrom, st, ed, &seq_len);
@@ -57,12 +57,13 @@ void VNTR_candidate::combine_insertions() {
         }
     }
     ins_tot = offset - 1;
-
-    int32_t padd = 10+repeat_ref.size()/10;
-    query = faidx_fetch_seq(fai, chrom, std::max(st-padd, 0), st-1, &seq_len);
+    if (pad < 0) {
+        pad = 10+repeat_ref.size()/10;
+    }
+    query = faidx_fetch_seq(fai, chrom, std::max(st-pad, 0), st-1, &seq_len);
     rel_st = query.length();
     query += merged_longest_rr;
-    query += faidx_fetch_seq(fai, chrom, ed+1, ed+padd, &seq_len);
+    query += faidx_fetch_seq(fai, chrom, ed+1, ed+pad, &seq_len);
     len_mrg = merged_longest_rr.length();
 }
 
@@ -111,6 +112,7 @@ int32_t VNTR_candidate::merge(VNTR_candidate& rt) {
         if (cp != 0) {
             return 0;
         }
+        return 1;
     }
 
 if (debug) {
@@ -118,7 +120,16 @@ if (debug) {
 }
     int32_t u_st = std::min(st, rhs.st);
     int32_t u_ed = std::max(ed, rhs.ed);
-    // Rule out immediate mergeable (Type 1 merge)
+    bool novel = 1;
+    for (auto &m : alternative_models) {
+        int32_t cmp = m.ru_compare(rhs);
+        if (cmp == 0 || cmp == 3) {
+            novel = 0;
+            break;
+        }
+    }
+
+    // If readily mergeable
     if (cp == 0 || (cp > 0 && f_ovlp >= critical_ovlp) ) {
         need_refit = (st > u_st || ed < u_ed);
         st = u_st;
@@ -126,33 +137,17 @@ if (debug) {
         for (auto &v : rt.insertions) {
             add_insertion(v.first, v.second);
         }
-        for (auto &m : alternative_models) {
-            int32_t cmp = m.ru_compare(rhs);
-            if (cmp == 0) {
-                return 1;
-            }
+        if (novel && fit_alt_model(rhs)) {
+            alternative_models.push_back(rhs);
+            return 1;
         }
-        alternative_models.push_back(rhs);
         return 1;
     }
 
-    // Check if query is nested in existing record
-    if (cp >= 0 && rt.st >= st && rt.ed <= ed) {
-        for (auto &m : alternative_models) {
-            int32_t cmp = m.ru_compare(rhs);
-            if (cmp >= 0) {
-                for (auto &v : rt.insertions) {
-                    add_insertion(v.first, v.second);
-                }
-                return 1;
-            } // Already in candidates
-        }
-    }
-
-    // O.w. need to check if a model fits both segments well
+    // O.w. (incompatible RU or not enough overlap)
+    // Need to check if a model fits both segments well
     // Check if the current model fits the query sequence well
-    double m1r2 = rt.fit_alt_model(motif);
-    if (m1r2 < rt.score_l*cover) { // Does not explain the additional region well
+    if (!rt.fit_alt_model(motif)) { // Does not explain the additional region well
         return 0;
     }
     if (st > u_st || ed < u_ed) { // Extend current focal region
@@ -161,10 +156,8 @@ if (debug) {
         ed = u_ed;
     }
     // Check if the query model is worth considering
-    alternative_models.push_back(rhs);
-    evaluate_models(alternative_models.size()-1);
-    if (alternative_models.back().viterbi_score < score_l*cover) {
-        alternative_models.pop_back();
+    if (novel && fit_alt_model(rhs)) {
+        alternative_models.push_back(rhs);
     }
     if (f_ovlp >= critical_ovlp) { // Close enough, and can be explained, merge
         return 1;
@@ -187,7 +180,7 @@ int32_t VNTR_candidate::intersect(VNTR_candidate& rt) {
     return  rlen_l+rhs.l - (u_ed-u_st+1);
 }
 
-double VNTR_candidate::fit_alt_model(candidate_fuzzy_motif& rhs) {
+bool VNTR_candidate::fit_alt_model(candidate_fuzzy_motif& rhs) {
     if (need_refit) {
         model_refit();
     }
@@ -197,22 +190,28 @@ double VNTR_candidate::fit_alt_model(candidate_fuzzy_motif& rhs) {
     WPHMM_UNGAP* wphmm = new WPHMM_UNGAP(query.c_str(), rhs.ru.c_str(), debug, bv, rhs.inexact);
     wphmm->set_ru(rhs.ru, rhs.label);
     wphmm->initialize();
-    std::string v_path = wphmm->print_viterbi_path();
+    wphmm->viterbi();
     wphmm->detect_range();
-    double new_score = -1;
-    if (wphmm->segments.size() > 0) {
-        new_score = wphmm->focal_rr.score;
-    }
+    bool decision = 0;
+    if (wphmm->segments.size() == 0) {
+        decision = false;
 if (debug) {
-    std::cerr << "VNTR_candidate::fit_alt_model\n";
-    // std::cerr << query << std::endl;
+    std::cerr << "VNTR_candidate::fit_alt_model Rejected\n";
     std::cerr << "Query model " << rhs.ru << "\tOriginal model " << motif.ru << '\n';
-    std::cerr << "WPHMM_UNGAP New log2 OR: " << new_score << '\t';
-    std::cerr << "Original OR: " << score_l << '\n';
 }
+    } else {
+        seq_segment& rr = wphmm->focal_rr;
+        decision = (rr.score > 3 && rr.l > rlen_l * 0.6 && rr.nr >= 2 && rr.match_motif < 0.75*rr.l);
+if (debug) {
+    std::cerr << "VNTR_candidate::fit_alt_model " << decision << '\t';
+    std::cerr << "Query model " << rhs.ru << "\tOriginal model " << motif.ru << '\n';
+    std::cerr << "New length, nr, log2 OR: " << rr.l << '\t' << rr.nr << '\t' << rr.score << '\t';
+    std::cerr << "Original: " << rlen_l << '\t' << n_ru_l << '\t' << score_l << '\n';
+}
+    }
     delete wphmm;
     wphmm = NULL;
-    return new_score;
+    return decision;
 }
 
 void VNTR_candidate::model_refit() {
@@ -232,36 +231,8 @@ void VNTR_candidate::model_refit() {
 
 bool VNTR_candidate::finalize(int32_t flk) {
 
-    combine_insertions();
-    if (!choose_model()) { // Choose model based on the longest allele
+    if (alternative_models.size() == 0) {
         return 0;
-    }
-if (debug) {
-    printf("VNTR_candidate::finalize st %d, ed %d: ru %s, length, nr, score: %d, %d, %.3f, concordance %.3f\n", st, ed, motif.ru.c_str(), rlen_l, n_ru_l, score_l, motif.concordance);
-}
-    // Keep at most two candidate RUs
-    // (if there exists reasonable exact and inexact ones)
-    // TODO: this is temporary
-    auto it = alternative_models.begin();
-    bool ex = 0, fz = 0;
-    double max_score = it->viterbi_score;
-    while (it != alternative_models.end()) {
-        if (it->viterbi_score > max_score*0.5) {
-            if (it->viterbi_score > max_score) {
-                max_score = it->viterbi_score;
-            }
-            if (it->inexact && (!fz)) {
-                fz = 1;
-                it++;
-                continue;
-            }
-            if ((!it->inexact) && (!ex)) {
-                ex = 1;
-                it++;
-                continue;
-            }
-        }
-        it = alternative_models.erase(it);
     }
 
     if (len_mrg > repeat_ref.length() && repeat_ref.length() >= mlen) {
@@ -312,10 +283,12 @@ if (debug) {
         score_r = score_l;
         n_ru_r = n_ru_l;
         rlen_r = rlen_l;
+        concordance_r = motif.concordance;
         if (alternative_models.size() > 1) {
             score_r2 = alternative_models[1].viterbi_score;
             n_ru_r2 = alternative_models[1].n_ru;
             rlen_r2 = alternative_models[1].l;
+            concordance_r2 = alternative_models[1].concordance;
         }
     }
     int32_t seq_len;
@@ -324,7 +297,6 @@ if (debug) {
     return 1;
 }
 
-
 bool VNTR_candidate::choose_model() {
     if (alternative_models.size() == 0) {
         return 0;
@@ -332,11 +304,11 @@ bool VNTR_candidate::choose_model() {
     if (alternative_models.size() > 1 || need_refit) {
         evaluate_models();
     }
-    // if (st != motif.st || ed != motif.ed) {
-    //     st = motif.st;
-    //     ed = motif.ed;
-    //     combine_insertions();
-    // }
+    if (st != motif.st || ed != motif.ed) {
+        st = motif.st;
+        ed = motif.ed;
+        combine_insertions();
+    }
     score_l = motif.viterbi_score;
     n_ru_l = motif.n_ru;
     rlen_l = motif.l;
@@ -352,6 +324,17 @@ void VNTR_candidate::evaluate_models() {
     }
     std::sort(alternative_models.begin(), alternative_models.end());
     motif = alternative_models[0];
+
+    auto it = alternative_models.begin();
+    it++;
+    while (it != alternative_models.end()) {
+        if (it->n_ru > 1 && it->concordance > 0.75) {
+            it++;
+        } else {
+            it = alternative_models.erase(it);
+        }
+    }
+
 }
 
 
@@ -382,9 +365,9 @@ void VNTR_candidate::evaluate_models(uint32_t index) {
         mot.viterbi_score = rr.score;
         mot.concordance = (double) rr.match_motif / mot.l;
     }
-// if (debug) {
-//     std::cerr << "VNTR_candidate::evaluate_models " << mot.ru << '\t' << mot.inexact << '\t' << mot.st << '\t' << mot.ed << '\t' << mot.l << '\n';
-// }
+if (debug) {
+    std::cerr << "VNTR_candidate::evaluate_models " << mot.ru << '\t' << mot.inexact << '\t' << mot.st << '\t' << mot.ed << '\t' << mot.l << '\t' << mot.n_ru << '\t' << mot.concordance << '\t' << mot.viterbi_score << '\n';
+}
     delete wphmm;
     wphmm = NULL;
 
