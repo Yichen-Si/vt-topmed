@@ -68,9 +68,9 @@ public:
     std::map<char, float> random_base;
     std::vector<char> alphabet{'A','C','G','T'};
 
-WPHMM(const char* _s, const char* _m, bool _debug = 0, bool* _b = nullptr);
+WPHMM(const char* _s, const char* _m, bool _debug = 0, bool* _b = nullptr, bool _c = 0);
 ~WPHMM();
-
+void expanding_motif(const char* _m, bool* _b);
 void set_ru(std::string& _s, std::vector<bool>& _v) {
     ru = _s;
     inexact_label = _v;

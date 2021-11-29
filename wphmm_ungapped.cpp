@@ -317,7 +317,7 @@ bool WPHMM_UNGAP::count_ru() {
         }
         if (k < 0) {
             pre_state = 0;
-        } else if (pre_state == 1 && ptype != 0) { // I/D
+        } else if (ptype != 0 || (ptype == 0 && seq[j]!=motif->base[k])) { // I/D/m
             pre_state = 0;
         } else if (pre_state == 1 && k == racr && ptype==0) { // M[m-1], a ru completed
             ru_complete[j] = ru_complete[j-1] + 1;
@@ -397,7 +397,7 @@ void WPHMM_UNGAP::detect_range() {
     if (pre_state == 1) {
         // Ending last M segment
         s_st = 0;
-        n_ru = ru_complete[s_ed]-ru_complete[s_st];
+        n_ru = ru_complete[s_ed];
         seq_segment seg(s_st, s_ed, n_ru, s_ed-s_st+1-n_ins);
         seg.score = vmle[s_ed] - (s_ed - s_st) * tmm;
         segments.push_back(seg);

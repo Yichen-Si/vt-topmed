@@ -31,6 +31,7 @@ public:
     int32_t l;
     bool insertion_relevant;
     std::string insertion;
+    uint32_t phase;
 
     candidate_fuzzy_motif(std::string _u, std::vector<bool> _w, int32_t _s, int32_t _e, int32_t _n, double _v, int32_t _l = -1, int32_t _c = 0) : ru(_u), label(_w), st(_s), ed(_e), n_ru(_n), viterbi_score(_v), l(_l) {
             ru_org = ru;
@@ -44,6 +45,15 @@ public:
             }
             insertion_relevant=0;
             concordance = (double) _c / l;
+            canonical();
+        }
+    candidate_fuzzy_motif(std::string _u, std::vector<bool> _w) : ru(_u), label(_w) {
+            ru_org = ru;
+            mlen = ru.length();
+            inexact = 0;
+            for (uint32_t i = 0; i < mlen; ++i) {
+                inexact = inexact || label[i];
+            }
             canonical();
         }
     candidate_fuzzy_motif() {}
@@ -70,10 +80,10 @@ public:
             w.push_back( std::make_pair( ru.substr(i)+ru.substr(0,i), i ) );
         }
         std::sort(w.begin(), w.end());
+        phase = w[0].second;
         if (w[0].second == 0) {
             return;
         }
-        uint32_t phase = w[0].second;
         if (inexact) {
             std::vector<bool> tmp(mlen, 0);
             for (uint32_t i = 0; i < mlen; ++i) {

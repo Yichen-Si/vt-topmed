@@ -1,25 +1,31 @@
 #include "wphmm.h"
 
-WPHMM::WPHMM(const char* _s, const char* _m, bool _debug, bool* _b) {
+WPHMM::WPHMM(const char* _s, const char* _m, bool _debug, bool* _b, bool _c) {
     debug = _debug;
-    motif = new Motif_fuzzy_binary(_m, Alphabet_size);
+
+    if (_c && (_b != nullptr)) {
+        expanding_motif(_m, _b);
+    } else {
+        motif = new Motif_fuzzy_binary(_m);
+        if (_b != nullptr) {
+            int32_t n_inexact = 0;
+            for (uint32_t i = 0; i < motif->mlen; ++i) {
+                n_inexact += _b[i];
+            }
+            if (n_inexact >= motif->mlen) {
+                fprintf(stderr, "[%s:%d %s] Motif is ill defined\n", __FILE__, __LINE__, __FUNCTION__);
+                exit(1);
+            }
+            motif->set_indicator(_b);
+        } else {
+            ru.assign(_s, mlen);
+            inexact_label.resize(mlen);
+            std::fill(inexact_label.begin(), inexact_label.end(), 0);
+        }
+    }
     motif->set_emission(.05); // Mismatch probability
     mlen = motif->mlen;
-    int32_t n_inexact = 0;
-    if (_b != nullptr) {
-        for (uint32_t i = 0; i < mlen; ++i) {
-            n_inexact += _b[i];
-        }
-        if (n_inexact >= mlen) {
-            fprintf(stderr, "[%s:%d %s] Motif is ill defined\n", __FILE__, __LINE__, __FUNCTION__);
-            exit(1);
-        }
-        motif->set_indicator(_b);
-    } else {
-        ru.assign(_s, mlen);
-        inexact_label.resize(mlen);
-        std::fill(inexact_label.begin(), inexact_label.end(), 0);
-    }
+
     L = strlen(_s);
     N = 0;
     B = 1;
@@ -81,6 +87,24 @@ WPHMM::~WPHMM() {
         free(viterbi_mtx[i]);
     }
     free(W); free(M); free(I); free(D); free(viterbi_mtx);
+}
+
+void WPHMM::expanding_motif(const char* _m, bool* _b) {
+    int32_t m = strlen(_m);
+    std::string unit;
+    std::vector<bool> tmp;
+    for (uint32_t i = 0; i < m; ++i) {
+        unit += _m[i];
+        tmp.push_back(0);
+        if (_b[i]) {
+            unit += _m[i];
+            tmp.push_back(1);
+        }
+    }
+    m = unit.size();
+    bool base_relax[m];
+    std::copy(tmp.begin(), tmp.end(), base_relax);
+    motif = new Motif_fuzzy_binary(unit.c_str(), base_relax);
 }
 
 void WPHMM::initialize() {
@@ -338,7 +362,7 @@ bool WPHMM::count_ru() {
         }
         if (k < 0) {
             pre_state = 0;
-        } else if (pre_state == 1 && ptype != 0) { // I/D
+        } else if (ptype != 0 || (ptype == 0 && seq[j]!=motif->base[k])) { // I/D/m
             pre_state = 0;
         } else if (pre_state == 1 && k == racr && ptype==0) { // M[m-1], a ru completed
             ru_complete[j] = ru_complete[j-1] + 1;
@@ -431,7 +455,7 @@ void WPHMM::detect_range() {
     if (pre_state == 1) {
         // Ending last M segment
         s_st = 0;
-        n_ru = ru_complete[s_ed]-ru_complete[s_st];
+        n_ru = ru_complete[s_ed];
         seq_segment seg(s_st, s_ed, n_ru, s_ed-s_st+1-n_ins);
         seg.score = vmle[s_ed] - (s_ed - s_st) * tmm;
         segments.push_back(seg);

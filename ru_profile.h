@@ -58,37 +58,6 @@ public:
     }
 };
 
-class Motif_fuzzy : public Motif_exact
-{
-public:
-    int8_t** srange; // single base repeat min max
-
-    Motif_fuzzy(const char* _b, int8_t** _s = nullptr, int32_t _a = 4) : Motif_exact(_b, _a) {
-        srange = (int8_t**) malloc(sizeof(int8_t*) * mlen);
-        if (_s == nullptr) {
-            for (int32_t i = 0; i < mlen; ++i) {
-                srange[i] = (int8_t*) malloc(sizeof(int8_t)*2);
-            }
-        } else {
-            for (int32_t i = 0; i < mlen; ++i) {
-                srange[i] = (int8_t*) malloc(sizeof(int8_t)*2);
-                memcpy(srange[i], _s[i], 2);
-            }
-        }
-    }
-    ~Motif_fuzzy(){
-        for (int32_t i = 0; i < mlen; ++i) {
-            free(srange[i]);
-        }
-        free(srange);
-    }
-    void set_range(int8_t** _s) {
-        for (int32_t i = 0; i < mlen; ++i) {
-            memcpy(srange[i], _s[i], 2);
-        }
-    }
-};
-
 class Motif_fuzzy_binary : public Motif_exact
 {
 public:
@@ -104,7 +73,7 @@ public:
         if_soft = (bool*) malloc(mlen);
         set_indicator(_s);
     }
-    ~Motif_fuzzy_binary() {
+    ~Motif_fuzzy_binary() {   
         free(if_soft);
     }
     void set_indicator(bool* _s) {

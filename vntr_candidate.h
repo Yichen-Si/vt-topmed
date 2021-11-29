@@ -39,12 +39,12 @@ class VNTR_candidate
     double score_r2, concordance_r, concordance_r2;
     const char* chrom;
     std::string repeat_ref;     // repeat region in ref
-    std::string lflank;         // left flank
-    std::string rflank;         // right flank
+    std::string query;          // including relevant insertions and short flanking sequences
+    std::string lflank;         // left flank, for output
+    std::string rflank;         // right flank, for output
     std::list<std::pair<int32_t, std::string> > insertions; // maintain sorted
     // std::set<int32_t> inserted_pos;
     int32_t rel_st, len_mrg, ins_tot;
-    std::string query;
     // std::string merged_longest_rr; // could make this easier by keeping only the longest allele
     bool need_refit;
     // Criteria to decide if merge two candidates
@@ -69,7 +69,7 @@ class VNTR_candidate
 
     void add_insertion(int32_t _p, std::string _s);
     void combine_insertions(int32_t pad = -1);
-    int32_t get_pos_in_ref(int32_t p_rel, int32_t rel_st = 0);
+    int32_t get_pos_in_ref(int32_t p_rel, bool right = 0);
 
     /**
      * Merge two VNTR record if possible.
@@ -97,7 +97,7 @@ class VNTR_candidate
     void model_refit();
     bool choose_model();
     void evaluate_models();
-    void evaluate_models(uint32_t index);
+    void evaluate_models(candidate_fuzzy_motif& mot);
 
     /**
      * Prepare this TR for output

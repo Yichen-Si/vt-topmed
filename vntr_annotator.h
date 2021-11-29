@@ -51,11 +51,12 @@ class VNTRAnnotator
     double min_ecover_indel, min_pcover_indel;
     double min_ecover_extended, min_pcover_extended;
     int32_t extend_bp; // distance in both direction to go when HMM
+    int32_t min_copy;  // Minimum copies of RU to declare VNTR
 
     // tools
     faidx_t* fai;
 
-    VNTRAnnotator(std::string& ref_fasta_file, bool _debug=false, uint32_t _m = 16);
+    VNTRAnnotator(std::string& ref_fasta_file, bool _debug=false, uint32_t _m = 16, int32_t _c = 2);
     ~VNTRAnnotator();
 
     void set_ru_detection_threshold(double _e1, double _p1, double _e2, double _p2) {
@@ -88,7 +89,7 @@ class VNTRAnnotator
      void find_homopoly_region(std::string& query, char b, int32_t& st, int32_t& ed, int32_t& nr);
 
      /**
-      * Choose top models for a vntr candidate regioin 
+      * Choose top models for a vntr candidate regioin
       */
      bool choose_models(VNTR_candidate& vntr, int32_t mode=VITERBI_VNTR);
 
@@ -96,6 +97,12 @@ class VNTRAnnotator
      * Returns true if is to be classified as a VNTR
      */
     bool is_vntr(candidate_fuzzy_motif& motif, int32_t mode);
+
+    /**
+     * Helpers
+     */
+    void to_rl(std::string& seq, std::string& cseq, std::vector<int32_t>& rl);
+    bool substr_to_candidate_unit(std::string& s, std::string& cseq, std::vector<int32_t>& rl, candidate_unit& tmp);
 };
 
 #endif

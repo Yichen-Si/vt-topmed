@@ -34,7 +34,10 @@ void ShiftAlign::right_shift(int32_t &st0, int32_t &st, int32_t &ed, std::string
     // Read sequence
     int32_t seq_len;
     int32_t r_most = p_ed + max_l;
-    std::string seq = extension + faidx_fetch_seq(fai, chrom, p_ed+1, r_most, &seq_len);
+    char* ss = faidx_fetch_seq(fai, chrom, p_ed+1, r_most, &seq_len);
+    std::string seq = extension;
+    seq.append(ss);
+    free(ss);
     // [0, s_st-1] is in inserted/deleted sequence, >= s_st is shared
     int32_t min_i, min_j, max_i, max_j;
 // if (debug) {
@@ -57,7 +60,10 @@ void ShiftAlign::left_shift(int32_t &ed0, int32_t &st, int32_t &ed, std::string&
     int32_t seq_len;
     int32_t l_most = p_st - max_l;
     // [max_l+1, ] is in inserted/deleted sequence, [0, max_l] is shared
-    std::string seq = faidx_fetch_seq(fai, chrom, l_most, p_st, &seq_len) + extension;
+    char* ss = faidx_fetch_seq(fai, chrom, l_most, p_st, &seq_len);
+    std::string seq(ss);
+    seq += extension;
+    free(ss);
     // [0, s_st-1] is in inserted/deleted sequence, >= s_st is shared
     std::reverse(seq.begin(), seq.end());
     int32_t min_i, min_j, max_i, max_j;
